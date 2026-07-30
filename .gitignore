@@ -1,0 +1,4 @@
+__pycache__/
+*.duckdb
+social_history.json
+picdata/
