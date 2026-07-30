@@ -2096,7 +2096,7 @@ Comment Data:
                             break
                     if cont_token:
                         break
-            inner_key = "YOUTUBE_INNER_KEY"
+            inner_key = os.getenv('GOOGLE_API_KEY', '')
             api_url = f"https://www.youtube.com/youtubei/v1/next?key={inner_key}"
             payload = {
                 "context": {"client": {"hl": "en", "gl": "US", "clientName": "WEB", "clientVersion": "2.20230728.00.00"}},
