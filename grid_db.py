@@ -64,6 +64,44 @@ class GridDB:
                 turn_count INTEGER DEFAULT 0
             )
         """)
+        self.conn.execute("""
+            CREATE TABLE IF NOT EXISTS memory_atoms (
+                id INTEGER PRIMARY KEY,
+                session_id VARCHAR,
+                fact VARCHAR,
+                keywords VARCHAR,
+                turn INTEGER,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        self.conn.execute("""
+            CREATE SEQUENCE IF NOT EXISTS seq_memory_atoms START 1
+        """)
+        self.conn.execute("""
+            CREATE TABLE IF NOT EXISTS memory_scenarios (
+                id INTEGER PRIMARY KEY,
+                session_id VARCHAR,
+                title VARCHAR,
+                body VARCHAR,
+                turn_start INTEGER,
+                turn_end INTEGER,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        self.conn.execute("""
+            CREATE SEQUENCE IF NOT EXISTS seq_memory_scenarios START 1
+        """)
+        self.conn.execute("""
+            CREATE TABLE IF NOT EXISTS memory_refs (
+                id VARCHAR PRIMARY KEY,
+                session_id VARCHAR,
+                tool_name VARCHAR,
+                target VARCHAR,
+                preview VARCHAR,
+                ref_path VARCHAR,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
 
     def _init_session(self):
         self.conn.execute(
@@ -217,9 +255,80 @@ class GridDB:
 
         return "\n".join(lines)
 
+    # ── Layered memory (L1 atoms, L2 scenarios, offloaded refs) ──
+    def add_memory_atom(self, fact: str, keywords: str, turn: int):
+        self.conn.execute(
+            """
+            INSERT INTO memory_atoms (id, session_id, fact, keywords, turn)
+            VALUES (nextval('seq_memory_atoms'), ?, ?, ?, ?)
+            """,
+            [self.session_id, fact[:800], keywords[:300], turn],
+        )
+
+    def add_memory_scenario(self, title: str, body: str, turn_start: int, turn_end: int):
+        self.conn.execute(
+            """
+            INSERT INTO memory_scenarios (id, session_id, title, body, turn_start, turn_end)
+            VALUES (nextval('seq_memory_scenarios'), ?, ?, ?, ?, ?)
+            """,
+            [self.session_id, title[:200], body[:1500], turn_start, turn_end],
+        )
+
+    def store_memory_ref(self, ref_id: str, tool_name: str, target: str, preview: str, ref_path: str):
+        self.conn.execute(
+            """
+            INSERT OR REPLACE INTO memory_refs (id, session_id, tool_name, target, preview, ref_path)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            [ref_id, self.session_id, tool_name, target[:300], preview[:400], ref_path],
+        )
+
+    def clear_memory(self):
+        for tbl in ("memory_atoms", "memory_scenarios", "memory_refs"):
+            self.conn.execute(f"DELETE FROM {tbl}")
+
+    def memory_status(self) -> int:
+        if self.conn is None:
+            return 0
+        try:
+            row = self.conn.execute("SELECT COUNT(*) FROM memory_atoms").fetchone()
+            return row[0] if row else 0
+        except Exception:
+            return 0
+
+    def search_memory(self, query: str, limit: int = 5) -> str:
+        """Keyword scoring over atoms + scenario titles. Zero deps, FTS-free."""
+        try:
+            tokens = [t for t in re.split(r"[^\w]+", query.lower()) if len(t) > 2]
+        except Exception:
+            tokens = []
+        if not tokens:
+            return ""
+        try:
+            conds_atoms = []
+            pats = []
+            for t in tokens:
+                conds_atoms.append("LOWER(fact) LIKE ?")
+                pats.append(f"%{t}%")
+            atoms = self.conn.execute(
+                f"SELECT fact, keywords FROM memory_atoms WHERE {' OR '.join(conds_atoms)} ORDER BY created_at DESC LIMIT {int(limit)}",
+                pats,
+            ).fetchall()
+            scen_rows = self.conn.execute(
+                "SELECT title, body FROM memory_scenarios ORDER BY created_at DESC LIMIT 4"
+            ).fetchall()
+            out = []
+            for fact, kw in atoms:
+                out.append(f"- {fact}")
+            for title, body in scen_rows:
+                out.append(f"[scenario] {title}: {body[:200]}")
+            return "\n".join(out) if out else ""
+        except Exception:
+            return ""
+
     def end_session(self):
         self.conn.execute(
-            "UPDATE sessions SET ended_at = CURRENT_TIMESTAMP, turn_count = (SELECT count(*) FROM tool_logs WHERE session_id = ?) WHERE id = ?",
+            "UPDATE sessions SET ended_at = CURRENT_TIMESTAMP, turn_count = (SELECT COUNT(*) FROM tool_logs WHERE session_id = ?) WHERE id = ?",
             [self.session_id, self.session_id],
         )
 

@@ -2,3 +2,13 @@ __pycache__/
 *.duckdb
 social_history.json
 picdata/
+
+# Runtime state
+config.json
+memory.md
+grid_persona.md
+refs/
+pb_data/
+pb_migrations/
+*.duckdb.wal
+*.duckdb.tmp

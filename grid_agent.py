@@ -13,6 +13,7 @@ warnings.filterwarnings("ignore", message=".*duckduckgo_search.*renamed.*")
 import shutil
 import socket
 import subprocess
+import uuid
 import atexit
 import sys
 import time
@@ -102,6 +103,9 @@ CONFIG_FILE = "config.json"
 OLLAMA_PORT = 11434
 LMSTUDIO_PORT = 1234
 MAX_TOOL_TURNS = 5
+REFS_DIR = "refs"
+PERSONA_FILE = "grid_persona.md"
+DISTILL_EVERY = 5
 
 console = Console()
 
@@ -534,6 +538,169 @@ class Memory:
 
 
 # ═══════════════════════════════════════════════════════════════
+# 3b. Recaller — layered memory (persona / atoms / scenarios / refs)
+# ═══════════════════════════════════════════════════════════════
+class Recaller:
+    """L3 persona + L1/L2 facts + offloaded tool refs, distilled from history.
+
+    Persists as: grid_persona.md, DuckDB memory_atoms/memory_scenarios/
+    memory_refs, and refs/<id>.md. Zero external deps (keyword recall only).
+    """
+
+    def __init__(self, backend, db, memory):
+        self.backend = backend
+        self.db = db
+        self.memory = memory
+        os.makedirs(REFS_DIR, exist_ok=True)
+        self.turn = 0
+        self._persona = self._load_persona()
+
+    def _load_persona(self) -> str:
+        try:
+            with open(PERSONA_FILE, "r", encoding="utf-8") as f:
+                return f.read().strip()
+        except FileNotFoundError:
+            return ""
+
+    def _save_persona(self):
+        try:
+            with open(PERSONA_FILE, "w", encoding="utf-8") as f:
+                f.write(self._persona.strip() + "\n")
+        except (OSError, PermissionError):
+            pass
+
+    def offload(self, tool_name: str, result: str, target: str = "") -> str:
+        """Write full verbatim tool output to a ref file, return its id."""
+        rid = uuid.uuid4().hex[:10]
+        path = os.path.join(REFS_DIR, f"{rid}.md")
+        try:
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(result)
+        except (OSError, PermissionError):
+            pass
+        if self.db is not None:
+            try:
+                self.db.store_memory_ref(rid, tool_name, target, result[:500], path)
+            except Exception:
+                pass
+        return rid
+
+    def read_ref(self, ref_id: str) -> str:
+        path = os.path.join(REFS_DIR, f"{ref_id}.md")
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                return f.read()
+        except FileNotFoundError:
+            return f"(ref {ref_id} not found)"
+
+    def build_context(self, user_input: str) -> str:
+        """Persona + recalled facts/scenarios relevant to the current input."""
+        blocks = []
+        if self._persona:
+            blocks.append("=== PERSISTENT MEMORY (persona) ===\n" + self._persona)
+        if self.db is not None:
+            try:
+                recalled = self.db.search_memory(user_input, 5)
+                if recalled:
+                    blocks.append("=== RECALLED MEMORY (relevant context) ===\n" + recalled)
+            except Exception:
+                pass
+        return "\n\n".join(blocks)
+
+    def distill(self, pairs: List[Dict[str, str]]):
+        """One LLM call to turn recent turns into persona + atoms + scenario."""
+        if not pairs:
+            return
+        conv = []
+        for m in pairs:
+            role = "USER" if m.get("role") == "user" else "GRID"
+            conv.append(f"{role}: {str(m.get('content', ''))[:600]}")
+        conv_text = "\n".join(conv[:18])
+        prompt = (
+            "Distill the conversation below into GRID's long-term memory fields.\n"
+            "Output ONLY these three sections, using a plain value per line after each header:\n"
+            "PERSONA: durable facts/preferences about the user (or NONE)\n"
+            "ATOMS: each useful standalone fact on its own line starting with '- ' (or NONE)\n"
+            "SCENARIO: one line '<short title>: <one sentence summary of any completed task>' (or NONE)\n"
+        )
+        try:
+            resp = self.backend.chat(
+                [
+                    {"role": "system", "content": prompt},
+                    {"role": "user", "content": conv_text},
+                ],
+                temperature=0.2,
+            )
+        except Exception:
+            return
+        self._ingest(resp)
+
+    def _ingest(self, resp: str):
+        text = (resp or "").strip()
+        sec = None
+        new_persona = []
+        atoms = []
+        scenario = None
+        for line in text.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            up = line.upper()
+            if up.startswith("PERSONA"):
+                sec = "persona"
+            elif up.startswith("ATOMS"):
+                sec = "atoms"
+            elif up.startswith("SCENARIO"):
+                sec = "scenario"
+                continue
+            else:
+                if sec == "persona":
+                    if line.upper() == "NONE":
+                        pass
+                    elif any(k in line.upper() for k in ("(NONE)", "FACTS/PREFERENCES", "DURABLE FACTS")):
+                        pass
+                    else:
+                        new_persona.append(line.lstrip("-").strip().rstrip("."))
+                elif sec == "atoms":
+                    if line.upper() != "NONE":
+                        atoms.append(line.lstrip("-").strip().rstrip("."))
+                elif sec == "scenario":
+                    if line.upper() != "NONE" and scenario is None:
+                        if ":" in line:
+                            title, body = line.split(":", 1)
+                            scenario = (title.strip(), body.strip())
+                        else:
+                            scenario = (line, "")
+
+        if new_persona:
+            existing = self._load_persona()
+            merged = existing + "\n" if existing else ""
+            seen = set(existing.lower().splitlines())
+            for p in new_persona:
+                if p.lower() not in seen:
+                    merged += f"- {p}\n"
+            self._persona = merged.strip()
+            self._save_persona()
+
+        if (atoms or scenario) and self.db is not None:
+            try:
+                for a in atoms:
+                    kw = " ".join(re.findall(r"[A-Za-z0-9]{3,}", a.lower()))[:300]
+                    self.db.add_memory_atom(a, kw, self.turn)
+                if scenario:
+                    title, body = scenario
+                    self.db.add_memory_scenario(title, body, max(0, self.turn - DISTILL_EVERY), self.turn)
+            except Exception:
+                pass
+
+    def tick(self):
+        self.turn += 1
+        if self.turn % DISTILL_EVERY == 0:
+            pairs = self.memory.history[-(DISTILL_EVERY * 2):]
+            self.distill(pairs)
+
+
+# ═══════════════════════════════════════════════════════════════
 # 4. Tool Registry
 # ═══════════════════════════════════════════════════════════════
 
@@ -575,6 +742,7 @@ class Tools:
     db = None
     pb = None
     memory_ref = None
+    recaller = None
     skills = None
     _last_tool: str | None = None
     _last_input: str = ""
@@ -3414,6 +3582,47 @@ Comment Data:
         return Tools.pb.status_text()
 
     @staticmethod
+    def _memory_recall(query: str = "") -> str:
+        if Tools.recaller is None:
+            return "Memory layer not active (run with duckdb installed)."
+        q = (query or "").strip()
+        ctx = Tools.recaller.build_context(q)
+        if not ctx:
+            return "No stored memory matches that query yet. Keep chatting — memory distills automatically."
+        return ctx
+
+    @staticmethod
+    def _memory_status(_unused: str = "") -> str:
+        if Tools.recaller is None:
+            return "Memory layer not active."
+        r = Tools.recaller
+        atoms = scenarios = refs = 0
+        if r.db is not None:
+            try:
+                conn = r.db.conn
+                atoms = conn.execute("SELECT COUNT(*) FROM memory_atoms").fetchone()[0]
+                scenarios = conn.execute("SELECT COUNT(*) FROM memory_scenarios").fetchone()[0]
+                refs = conn.execute("SELECT COUNT(*) FROM memory_refs").fetchone()[0]
+            except Exception:
+                pass
+        lines = [
+            f"Atoms (facts):  {atoms}",
+            f"Scenarios:      {scenarios}",
+            f"Refs (offload): {refs}",
+            f"Persona file:   {PERSONA_FILE}  ({len(r._persona)} chars)",
+        ]
+        return "\n".join(lines)
+
+    @staticmethod
+    def _ref_read(ref_id: str) -> str:
+        if Tools.recaller is None:
+            return "Memory layer not active."
+        rid = (ref_id or "").strip()
+        if not rid:
+            return "Usage: ref_read <ref_id>"
+        return Tools.recaller.read_ref(rid)
+
+    @staticmethod
     def _pb_sync(_unused: str = "") -> str:
         if not Tools.pb or not Tools.pb.token:
             return "PocketBase not connected. Start it first with /pb."
@@ -3508,6 +3717,9 @@ Tools._reg("db_analytics",     Tools._db_analytics,    "Show usage analytics for
 Tools._reg("pb_status",         Tools._pb_status,      "Check if PocketBase server is running and show its status.", "(ignored)")
 Tools._reg("pb_sync",           Tools._pb_sync,        "Sync conversation history to PocketBase.", "(ignored)")
 Tools._reg("pb_upload",         Tools._pb_upload,      "Upload a file to PocketBase as an artifact.", "path to file")
+Tools._reg("memory_recall",     Tools._memory_recall,  "Search GRID's layered memory (persona, facts, scenarios) for context relevant to a query. Use when the user references earlier work or asks 'do you remember'.", "query text")
+Tools._reg("memory_status",     Tools._memory_status,  "Show GRID's memory layer status: count of atoms, scenarios, offloaded refs, persona size.", "(ignored)")
+Tools._reg("ref_read",          Tools._ref_read,       "Read the full offloaded output for a saved tool reference id. Use to recover verbose tool output that was saved to disk.", "ref_id")
 Tools._reg("analyze_image",    Tools._analyze_image,  "Full image analysis: OCR text extraction, face detection, QR/barcode decoding, brightness/sharpness. Accepts path to any image file (PNG, JPG, etc.).", "path to image file")
 Tools._reg("screenshot_ocr",    Tools._screenshot_ocr, "Take a screenshot and extract all visible text via OCR. Returns the captured image path and any text found.", "(ignored)")
 Tools._reg("camera_check",      Tools._camera_check,   "Validate a camera stream by connecting and grabbing a frame. Accepts IP:port or full URL (http/rtsp/rtmp). Returns resolution, brightness, sharpness, and live/offline status.", "IP:port or full URL (e.g. '192.168.1.1:8080' or 'rtsp://...')")
@@ -3540,9 +3752,10 @@ def estimate_tokens(text: str) -> int:
 # ═══════════════════════════════════════════════════════════════
 
 class GridOrchestrator:
-    def __init__(self, backend: LLMBackend, memory: Memory):
+    def __init__(self, backend: LLMBackend, memory: Memory, recaller: Optional['Recaller'] = None):
         self.backend = backend
         self.memory = memory
+        self.recaller = recaller
         self.plan_mode = False
 
     def _build_messages(self, user_input: str) -> List[Dict]:
@@ -3658,6 +3871,13 @@ class GridOrchestrator:
             )
 
         messages = [{"role": "system", "content": base_prompt + Tools.SCHEMA}]
+        if self.recaller is not None:
+            try:
+                ctx = self.recaller.build_context(user_input)
+                if ctx:
+                    messages.append({"role": "system", "content": ctx})
+            except Exception:
+                pass
         recent = self.memory.get_recent()
         messages.extend(recent)
         messages.append({"role": "user", "content": user_input})
@@ -3902,10 +4122,21 @@ class GridOrchestrator:
 
             tool_chain.append((tool_name, tool_input, result))
             messages.append({"role": "assistant", "content": llm_response})
-            messages.append({
-                "role": "user",
-                "content": f"[Tool result for {tool_name}]:\n{result[:3000]}\n\nContinue based on the result above."
-            })
+            if self.recaller is not None and len(result) > 800:
+                rid = self.recaller.offload(tool_name, result, tool_input)
+                messages.append({
+                    "role": "user",
+                    "content": (
+                        f"[Tool result for {tool_name}]: full output saved to ref '{rid}'. "
+                        f"Preview:\n{result[:400]}\n\n"
+                        f"Continue based on the preview. Call ref_read {rid} if you need the complete output."
+                    )
+                })
+            else:
+                messages.append({
+                    "role": "user",
+                    "content": f"[Tool result for {tool_name}]:\n{result[:3000]}\n\nContinue based on the result above."
+                })
 
             ctx = sum(estimate_tokens(m["content"]) for m in messages)
             if ctx > 32000:
@@ -4383,13 +4614,17 @@ def main():
     ensure_deps()
     backend = choose_backend()
     memory = Memory(MEMORY_FILE)
-    orchestrator = GridOrchestrator(backend, memory)
+    recaller = None
+    orchestrator = GridOrchestrator(backend, memory, recaller)
 
     if HAS_DUCKDB:
         Tools.db = GridDB()
+        recaller = Recaller(backend, Tools.db, memory)
+        orchestrator.recaller = recaller
+        Tools.recaller = recaller
         atexit.register(lambda: Tools.db and Tools.db.close())
     else:
-        console.print(f"  [{M_DIM}][!] duckdb not installed — logging & caching disabled. Run: pip install duckdb[/]")
+        console.print(f"  [{M_DIM}][!] duckdb not installed — logging, caching & memory distillation disabled. Run: pip install duckdb[/]")
 
     Tools.memory_ref = memory
 
@@ -4746,6 +4981,37 @@ f"15 capability groups: [bold]Computer Use[/] | [bold]Files[/] | [bold]Shell[/] 
                         console.print(f"  [{M}]{result}[/]\n")
                         continue
 
+                    if cmd in ("/memory", "/memory show") or cmd.startswith("/memory "):
+                        parts = cmd.split(maxsplit=1)
+                        sub = parts[1].strip() if len(parts) > 1 else "status"
+                        if recaller is None:
+                            console.print(f"  [{M_DIM}]Memory layer not active (needs duckdb). pip install duckdb[/]\n")
+                            continue
+                        if sub in ("clear", "reset"):
+                            recaller.db.clear_memory()
+                            console.print(f"  [{M}]Layered memory cleared (persona untouched).[/]\n")
+                            continue
+                        console.print(Panel.fit(f"[bold {M}]GRID Memory[/]", border_style=M))
+                        console.print(f"  [{M}]{Tools._memory_status()}[/]")
+                        if sub not in ("status",):
+                            console.print()
+                            console.print(Tools._memory_recall(sub))
+                        console.print(f"  [{M_DIM}]Tip: 'memory <query>' recalls relevant facts, 'memory clear' resets the store.[/]")
+                        console.print()
+                        continue
+
+                    if cmd in ("/ref",) or cmd.startswith("/ref "):
+                        if recaller is None:
+                            console.print(f"  [{M_DIM}]Memory layer not active.[/]\n")
+                            continue
+                        parts = cmd.split(maxsplit=1)
+                        rid = parts[1].strip() if len(parts) > 1 else ""
+                        if not rid:
+                            console.print(f"  [{M_DIM}]Usage: /ref <id> — read an offloaded tool output.[/]\n")
+                            continue
+                        console.print(f"  [{M}]{recaller.read_ref(rid)}[/]\n")
+                        continue
+
                     if cmd == "/gcal" or cmd.startswith("/gcal "):
                         parts = cmd.split(maxsplit=1)
                         sub = parts[1].strip() if len(parts) > 1 else "help"
@@ -4922,6 +5188,8 @@ f"15 capability groups: [bold]Computer Use[/] | [bold]Files[/] | [bold]Shell[/] 
                             ("/gcal", "Google Calendar: events, create, search, sync"),
                             ("/gsheet", "Google Sheets + Excel: read, edit, stats, analyze, plot"),
                             ("/persona [set|clear]", "Set/view/clear your GRID identity for agent platforms"),
+                            ("/memory [query|clear]", "View layered memory, recall relevant facts, or clear it"),
+                            ("/ref <id>", "Read a full offloaded tool output"),
                             ("/pb", "PocketBase: start/stop/install/sync"),
                             ("/comms", "Communication channels (Telegram, etc.)"),
                             ("/help /?", "Show this help"),
@@ -4963,6 +5231,11 @@ f"15 capability groups: [bold]Computer Use[/] | [bold]Files[/] | [bold]Shell[/] 
                         console.print(Panel(combo, title=f"[bold {M}]GRID[/]", border_style=M, padding=(0, 1)))
                     console.print()
                     memory.add_turn(user_input, response)
+                    if recaller is not None:
+                        try:
+                            recaller.tick()
+                        except Exception:
+                            pass
                     if Tools.pb and Tools.pb.token:
                         Tools.pb.sync_conversation("user", user_input[:500], "grid")
                         Tools.pb.sync_conversation("assistant", response[:500], "grid")

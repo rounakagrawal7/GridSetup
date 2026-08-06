@@ -1,12 +1,61 @@
-# GRID v2 — General Reconnaissance & Intelligence Dashboard
+<div align="center">
 
-All-in-one OSINT, networking, automation, and computer vision platform.
+# GRID v2
+
+### General Reconnaissance & Intelligence Dashboard
+
+*An all-in-one, local-first agent for OSINT, networks, radio, satellites, microcontrollers, computer vision, and automation — with a persistent, human-like memory layer.*
+
+</div>
+
+---
+
+## ✨ What is GRID?
+
+GRID is a self-aware terminal agent that runs fully on your machine. It combines **16 capability groups** — OSINT, network recon, SDR/radio, satellite tracking, microcontroller IoT, computer vision, agent platforms, and automation — under a single conversational interface powered by your local LLM (Ollama), or any OpenAI-compatible backend.
+
+Unlike tool wrappers that live or die on a fixed context window, GRID ships with a **layered memory engine** inspired by modern agent-memory research (e.g. Tencent's 4-tier memory pyramid). It doesn't forget between sessions: it distills what it learns into reusable knowledge instead of drowning in truncated logs.
+
+---
+
+## 🧠 The New: Layered Memory Engine
+
+The latest release adds a real memory system that works across sessions with **zero new dependencies** (DuckDB keyword recall, fully local).
+
+| Layer | What it holds | Where it lives |
+|---|---|---|
+| **L3 · Persona** | Durable facts & preferences about you | `grid_persona.md` |
+| **L2 · Scenarios** | Summaries of completed tasks | DuckDB `memory_scenarios` |
+| **L1 · Atoms** | Standalone factual statements | DuckDB `memory_atoms` |
+| **L0 · Transcript** | Raw conversation | `memory.md` |
+| **Refs** | Full verbatim tool outputs (offloaded) | `refs/<id>.md` |
+
+**How it works:**
+- **Every 5 turns**, GRID silently runs one LLM distillation pass over recent history via `Recaller.distill()` — extracting atomic facts, task scenarios, and persona deltas. No feature slice you're still in the middle of gets lost.
+- **On every turn**, `_build_messages()` injects the persona plus *only the memories relevant to the current request* (keyword recall) alongside your recent turns — so context stays lean and relevant, not bloated.
+- **Tool-output offload**: verbose tool results (>800 chars) are written whole to `refs/`; the model is handed a short preview + a reference id it can pull the full output from on demand — dramatically cutting token usage on long chains.
+
+**Memory commands & tools:**
+
+| Command / Tool | Purpose |
+|---|---|
+| `/memory` | Show memory stats (atoms / scenarios / refs / persona) |
+| `/memory <query>` | Recall memories relevant to a query |
+| `/memory clear` | Reset the layered memory store |
+| `/ref <id>` | Read a full offloaded tool output |
+| `memory_recall` | Tool — search layered memory for context |
+| `memory_status` | Tool — memory layer health |
+| `ref_read` | Tool — pull an offloaded ref by id |
+
+*Inspired by the layered-memory approach popularised by agent frameworks such as Hermes and OpenClaw and TencentDB Agent Memory — humanlike memory, not a bigger scratchpad.*
+
+---
 
 ## Requirements
 
 - **Python 3.10+**
-- **Ollama** (for local LLM) — download from https://ollama.ai
-- **Tesseract OCR** *(optional)* — for image text extraction. Install via:
+- **Ollama** (local LLM) — https://ollama.ai
+- **Tesseract OCR** *(optional)* — for image text extraction:
   - `winget install UB-Mannheim.TesseractOCR`
   - or https://github.com/UB-Mannheim/tesseract/wiki
 
@@ -22,19 +71,27 @@ python grid_agent.py
 
 On first launch, select your LLM backend (Ollama), then pick a model.
 
+---
+
 ## What's Included
 
 | File | Purpose |
 |---|---|
-| `grid_agent.py` | Main application — CLI interface, tool registry, LLM orchestration |
-| `grid_vision.py` | Computer vision tools (OpenCV) — OCR, face detection, camera validation, video forensics |
-| `grid_osint.py` | OSINT engine — domain/IP/email/phone/username intelligence, camera search, dorking |
-| `grid_db.py` | DuckDB database layer — tool logging, caching, analytics |
+| `grid_agent.py` | Main app — CLI, tool registry, orchestrator, **layered memory** |
+| `grid_vision.py` | Computer vision — OCR, face detection, camera validation, video forensics |
+| `grid_osint.py` | OSINT engine — domain/IP/email/phone/username intel, camera search, dorking |
+| `grid_db.py` | DuckDB layer — tool logging, caching, analytics, **memory tables** |
 | `grid_pb.py` | PocketBase integration — cloud sync, artifact upload |
-| `install.py` | One-time setup — installs all pip packages, downloads models, creates config |
+| `grid_satellite.py` | Satellite tracking (ISS, passes, TLE, catalog) |
+| `grid_radio.py` | Radio & SDR (Radio-Browser, KiwiSDR, RTL-SDR) |
+| `grid_micro.py` | Microcontroller IoT (ESP32, Arduino, LoRa) |
+| `grid_skills.py` | Self-authored reusable skills |
+| `grid_agent_social.py` | Moltbook social agent platform |
+| `grid_google.py` / `grid_sheets.py` | Google Calendar & Sheets / Excel |
+| `install.py` | One-time setup — deps, models, config |
 | `requirements.txt` | Python package list |
-| `GRID_Tools_Test_Guide.docx` | Full user manual with command reference and examples |
-| `pocketbase.exe` | PocketBase server (optional — for cloud sync features) |
+| `GRID_Tools_Test_Guide.docx` | Full user manual + command reference |
+| `pocketbase.exe` | PocketBase server (optional, for cloud sync) |
 
 ## Screenshots
 
@@ -43,17 +100,29 @@ On first launch, select your LLM backend (Ollama), then pick a model.
 | ![GRID Session](screenshots/grid_session.png) | ![Radio & SDR](screenshots/radio_sdr.png) |
 | ![Satellite Tracking](screenshots/satellite.png) | ![Microcontroller](screenshots/microcontroller.png) |
 
+---
+
 ## Capabilities
 
-- **OSINT** — domains, IPs, emails, phones, usernames, camera search, Google dorking
-- **Network** — ping, DNS, netstat, Nmap scanning
-- **Netcat Suite** — TCP/UDP listener, client, scanner, proxy, file transfer, chat
-- **Computer Vision** — image OCR, face detection/comparison, camera stream validation, video forensics
+- **OSINT** — email/phone/username intelligence, IP/domain enrichment, camera search, Google dorking
+- **Network** — ping, DNS, netstat, NMAP scanning, netcat suite (listener/client/scan/proxy/transfer/chat)
+- **Computer Vision** — OCR, face detection/comparison, camera-stream validation, video forensics
 - **Computer Use** — mouse, keyboard, screenshots
 - **Data & Code** — CSV/JSON analysis via pandas, arbitrary Python execution
 - **Database** — DuckDB SQL queries, PocketBase sync
+- **Memory** — persona, facts, scenarios, offloaded refs, relevance ranking, keyword recall
 - **Communication** — Telegram, email
 - **System** — hardware info, process management, weather
+- **Flight / Satellite / Radio / IoT** — live flight tracking, satellite passes, SDR, microcontrollers
+
+## Recent Changes — Memorable GRID (v2 Memory)
+
+- Added 4-tier layered memory: persona / scenarios / atoms / offloaded refs.
+- Automatic 5-turn distillation into long-term knowledge via the local LLM.
+- Relevance-based context injection in place of blind last-5-turn truncation.
+- Tool-output offload to reduce token usage on long multi-step tasks.
+- New tools (`memory_recall`, `memory_status`, `ref_read`) and `/memory`, `/ref` commands.
+- Broadened `.gitignore` to keep local memory/config state out of the repo.
 
 ## Commands
 
@@ -65,9 +134,11 @@ On first launch, select your LLM backend (Ollama), then pick a model.
 | `/tools` | View all tools |
 | `/clear` | Clear conversation |
 | `/plan` | Toggle step-by-step planner mode |
-| `/apikey` | Configure API keys (YouTube, Shodan, VirusTotal, etc.) for enhanced tools |
+| `/memory [query\|clear]` | View / recall / clear layered memory |
+| `/ref <id>` | Read an offloaded tool output |
+| `/apikey` | Configure API keys (YouTube, Shodan, VirusTotal, etc.) |
 | `/help` | Show command reference |
 
 ## Documentation
 
-Open `GRID_Tools_Test_Guide.docx` for the complete user manual with tool descriptions, examples, and quick reference commands.
+Open `GRID_Tools_Test_Guide.docx` for the complete user manual, tool descriptions, examples, and quick-reference commands.
