@@ -4,6 +4,7 @@ Moltbook client: register, post, reply, vote, feed, search, follow, manage submo
 Security: only platform-issued agent API keys stored in agent file — never user credentials.
 """
 
+import difflib
 import json
 import os
 import re
@@ -13,9 +14,11 @@ from datetime import datetime
 from typing import Optional
 
 CONFIG_FILE = "config.json"
-MOLTBOOK_BASE = "https://api.moltbook.com"
+MOLTBOOK_BASE = "https://www.moltbook.com/api/v1"
 MOLTBOOK_AGENT_FILE = "moltbook_agents.json"
 SOCIAL_HISTORY_FILE = "social_history.json"
+MOLTBOOK_REPLIED_FILE = "moltbook_replied.json"
+MOLTBOOK_STATS_FILE = "social_stats.json"
 
 PERSONA_DESCRIPTION = """\
 GRID needs a persona (a username) before it can post or interact on AI agent platforms.
@@ -168,13 +171,19 @@ class MoltbookClient:
             r = requests.post(f"{self.base}/agents/register", json=data, headers={"Content-Type": "application/json"}, timeout=30)
             if r.status_code in (200, 201):
                 result = r.json()
-                agent_id = result.get("agent_id") or result.get("agent", {}).get("agent_id")
-                api_key = result.get("api_key") or result.get("agent", {}).get("api_key")
-                if agent_id and api_key:
+                agent = result.get("agent") or {}
+                api_key = agent.get("api_key") or result.get("api_key")
+                claim_url = agent.get("claim_url") or result.get("claim_url") or ""
+                verification_code = agent.get("verification_code") or result.get("verification_code") or ""
+                agent_id = agent.get("agent_id") or agent.get("id") or result.get("agent_id") or ""
+                if api_key:
                     agents = _load_agents()
                     agents[name] = {
                         "agent_id": agent_id,
                         "api_key": api_key,
+                        "claim_url": claim_url,
+                        "verification_code": verification_code,
+                        "owner_email": owner_email,
                         "name": name,
                         "description": description,
                         "created_at": datetime.now().isoformat()
@@ -182,7 +191,14 @@ class MoltbookClient:
                     _save_agents(agents)
                     self._agent_info = agents[name]
                     self.agent_name = name
-                    return f"Agent '{name}' registered!\n  ID: {agent_id}\n  API Key: {api_key}\nSaved to {MOLTBOOK_AGENT_FILE}."
+                    msg = f"Agent '{name}' registered!\n  API Key: {api_key}\nSaved to {MOLTBOOK_AGENT_FILE}."
+                    if claim_url:
+                        msg += f"\n  CLAIM URL (send to your human): {claim_url}"
+                    if verification_code:
+                        msg += f"\n  Verification code: {verification_code}"
+                    if not agent_id:
+                        msg += "\n  NOTE: claim the agent via the CLAIM URL to activate it."
+                    return msg
                 return json.dumps(result, indent=2)
             return f"Registration failed ({r.status_code}): {r.text[:500]}"
         except Exception as e:
@@ -199,7 +215,7 @@ class MoltbookClient:
     # ── Posts ────────────────────────────────────────────────────
 
     def create_post(self, title: str, content: str, submolt: str = "general") -> str:
-        return self._request("POST", "/posts", data={"type": "text", "title": title, "content": content, "submolt": submolt})
+        return self._request("POST", "/posts", data={"type": "text", "title": title, "content": content, "submolt_name": submolt})
 
     def get_posts(self, sort: str = "hot", limit: int = 25, submolt: Optional[str] = None, offset: int = 0) -> str:
         params = {"sort": sort, "limit": str(limit), "offset": str(offset)}
@@ -237,7 +253,6 @@ class MoltbookClient:
 
     def reply_comment(self, comment_id: str, content: str) -> str:
         return self._request("POST", f"/comments/{comment_id}/reply", data={"content": content})
-
     def get_comments(self, post_id: str, sort: str = "best", limit: int = 100) -> str:
         return self._request("GET", f"/posts/{post_id}/comments", params={"sort": sort, "limit": str(limit)})
 
@@ -252,8 +267,8 @@ class MoltbookClient:
     def get_submolt(self, name: str) -> str:
         return self._request("GET", f"/submolts/{name}")
 
-    def create_submolt(self, name: str, display_name: str, description: str, category: str = "general") -> str:
-        return self._request("POST", "/submolts", data={"name": name, "display_name": display_name, "description": description, "category": category})
+    def create_submolt(self, name: str, display_name: str, description: str, allow_crypto: bool = False) -> str:
+        return self._request("POST", "/submolts", data={"name": name, "display_name": display_name, "description": description, "allow_crypto": allow_crypto})
 
     def subscribe(self, submolt_name: str) -> str:
         return self._request("POST", f"/submolts/{submolt_name}/subscribe")
@@ -261,18 +276,24 @@ class MoltbookClient:
     def unsubscribe(self, submolt_name: str) -> str:
         return self._request("DELETE", f"/submolts/{submolt_name}/subscribe")
 
+    # ── Verification & status ────────────────────────────────────
+
+    def verify(self, verification_code: str, answer: str) -> str:
+        return self._request("POST", "/verify", data={"verification_code": verification_code, "answer": answer})
+
+    def check_status(self) -> str:
+        return self._request("GET", "/agents/status")
+
     # ── Feed ─────────────────────────────────────────────────────
 
     def get_feed(self, feed_type: str = "home", sort: str = "hot", limit: int = 25) -> str:
-        if feed_type == "home":
-            return self._request("GET", "/feed", params={"sort": sort, "limit": str(limit)})
-        return self._request("GET", f"/feed/{feed_type}", params={"sort": sort, "limit": str(limit)})
+        return self._request("GET", "/feed", params={"sort": sort, "limit": str(limit)})
 
     # ── Search ───────────────────────────────────────────────────
 
     def search(self, query: str, search_type: str = "all", limit: int = 25, time_filter: str = "all") -> str:
-        params = {"q": query, "limit": str(limit), "time": time_filter}
-        return self._request("GET", f"/search/{search_type}" if search_type != "all" else "/search", params=params)
+        params = {"q": query, "type": search_type, "limit": str(limit)}
+        return self._request("GET", "/search", params=params)
 
     # ── Following ────────────────────────────────────────────────
 
@@ -337,6 +358,160 @@ def _extract_id(response_text: str) -> str:
     return ""
 
 
+# ── Auto verification challenge solving ──────────────────────────
+
+_NUM_WORDS = {n: i for i, n in enumerate([
+    "zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine",
+    "ten", "eleven", "twelve", "thirteen", "fourteen", "fifteen", "sixteen",
+    "seventeen", "eighteen", "nineteen", "twenty", "thirty", "forty", "fifty",
+    "sixty", "seventy", "eighty", "ninety", "hundred", "thousand"])}
+_TENS = {20: "twenty", 30: "thirty", 40: "forty", 50: "fifty", 60: "sixty",
+         70: "seventy", 80: "eighty", 90: "ninety"}
+_ONES = {1: "one", 2: "two", 3: "three", 4: "four", 5: "five", 6: "six",
+         7: "seven", 8: "eight", 9: "nine"}
+_NUM_CANDIDATES = {}
+for _w, _v in _NUM_WORDS.items():
+    _collapsed = re.sub(r"(.)\1+", r"\1", _w)
+    _NUM_CANDIDATES[_collapsed] = _v
+    _NUM_CANDIDATES[_w] = _v
+for _a in _TENS:
+    for _b in _ONES:
+        _phrase = f"{_TENS[_a]}{_ONES[_b]}"
+        _NUM_CANDIDATES[re.sub(r"(.)\1+", r"\1", _phrase)] = _a + _b
+        _NUM_CANDIDATES[_phrase] = _a + _b
+_NUM_CANDIDATES = sorted(_NUM_CANDIDATES.items(), key=lambda x: -len(x[0]))
+
+
+def _collapse_dups(text: str) -> str:
+    return re.sub(r"(.)\1+", r"\1", text)
+
+
+def _clean_challenge(challenge: str) -> str:
+    text = re.sub(r"[^a-zA-Z ]", "", challenge).lower()
+    return _collapse_dups(text)
+
+
+def _fuzzy_at(text: str, word: str, cutoff: float = 0.82) -> tuple:
+    best, best_pos = 0.0, -1
+    L = len(word)
+    for start in range(max(0, len(text) - L + 1)):
+        ratio = difflib.SequenceMatcher(None, text[start:start + L], word).ratio()
+        if ratio > best:
+            best, best_pos = ratio, start
+    return (best_pos, best) if best >= cutoff else (-1, best)
+
+
+def _extract_challenge_numbers(cleaned: str) -> list:
+    """Extract numbers from a deobfuscated challenge as a positional list."""
+    text = cleaned.replace(" ", "")
+    matches = []
+    for key, value in _NUM_CANDIDATES:
+        if value == 0:
+            continue
+        pos, _ = _fuzzy_at(text, key, 0.82)
+        if pos >= 0:
+            matches.append([pos, value, len(key)])
+    matches.sort(key=lambda m: m[0])
+    chosen = []
+    for pos, value, ln in matches:
+        if chosen and abs(pos - chosen[-1][0]) < max(ln, chosen[-1][2], 3):
+            continue
+        chosen.append((pos, value, ln))
+    return [v for _, v, _ in chosen]
+
+
+def solve_moltbook_challenge(challenge_text: str) -> Optional[str]:
+    """Solve an obfuscated math word challenge. Returns '12.34' or None."""
+    cleaned = _clean_challenge(challenge_text)
+    nums = _extract_challenge_numbers(cleaned)
+    if len(nums) < 2:
+        return None
+    a, b = nums[0], nums[1]
+    if any(w in cleaned for w in ("slows by", "slower", "decreases", "minus", "less")):
+        return f"{a - b:.2f}"
+    if any(w in cleaned for w in ("times", "multiplied")):
+        return f"{a * b:.2f}"
+    if any(w in cleaned for w in ("divided", "splits", "per")):
+        return f"{a / b:.2f}" if b else None
+    return f"{a + b:.2f}"
+
+
+# ── Secret / credential leak guard ───────────────────────────────
+
+_SECRET_PATTERNS = [
+    r"moltbook_sk_[A-Za-z0-9]{10,}",
+    r"moltbook_verify_[A-Za-z0-9_-]{10,}",
+    r"moltbook_claim_[A-Za-z0-9_-]{10,}",
+    r"sk-proj-[A-Za-z0-9-]{16,}",
+    r"sk-[A-Za-z0-9-]{20,}",
+    r"sk_[A-Za-z0-9]{20,}",
+    r"api[_-]?key\s*[:=]\s*\S{10,}",
+    r"bearer\s+[A-Za-z0-9._-]{15,}",
+    r"(?:password|passwd|pwd)\s*[:=]\s*\S{4,}",
+    r"(?:password|passwd|pwd)\s+(?:is|was)\s+(?=\S*[0-9@#!_.\-])\S{4,}",
+    r"(?:secret|token)\s*[:=]\s*\S{8,}",
+    r"(?:secret|token)\s+(?:is|was)\s+(?=\S*[0-9@#!_.\-])\S{8,}",
+    r"AKIA[0-9A-Z]{16}",
+    r"github_pat_[A-Za-z0-9_]{20,}",
+    r"ghp_[A-Za-z0-9]{36}",
+]
+
+
+def _contains_secret(text: str) -> Optional[str]:
+    """Return a matched secret-like pattern name if text looks like a credential, else None."""
+    if not text:
+        return None
+    lower = text.lower()
+    for pat in _SECRET_PATTERNS:
+        if re.search(pat, lower, re.IGNORECASE):
+            return pat
+    if "claim_url" in lower and ("http" in lower or "://" in lower):
+        return "claim_url"
+    if re.search(r"api[_ -]?key", lower) and re.search(r"[A-Za-z0-9]{16,}", text):
+        return "api_key"
+    return None
+
+
+def _guard_reply(reply: str) -> Optional[str]:
+    """Reject a generated reply that leaks secrets or mimics an instruction to leak."""
+    hit = _contains_secret(reply)
+    if hit:
+        return f"(blocked reply: detected {hit})"
+    return None
+
+
+def auto_verify_response(response_text: str) -> str:
+    """If the response contains a verification challenge, solve and submit it."""
+    try:
+        data = json.loads(response_text)
+    except (json.JSONDecodeError, ValueError):
+        return response_text
+    if not isinstance(data, dict):
+        return response_text
+    post = data.get("post") or data.get("comment") or data.get("submolt") or {}
+    ver = data.get("verification") or post.get("verification")
+    if not ver:
+        return response_text
+    code = ver.get("verification_code")
+    challenge = ver.get("challenge_text")
+    if not code or not challenge:
+        return response_text
+    answer = solve_moltbook_challenge(challenge)
+    if answer is None:
+        return response_text + "\n\n[Verification challenge unsolvable automatically — solve and use: social verify <code> <answer>]"
+    c = get_client()
+    result = c.verify(code, answer)
+    try:
+        vdata = json.loads(result)
+        ok = vdata.get("success")
+    except (json.JSONDecodeError, ValueError):
+        ok = False
+    if ok:
+        msg = vdata.get("message", "Verification successful!")
+        return response_text + f"\n\n[Auto-verified: {msg}]"
+    return response_text + f"\n\n[Auto-verify failed for answer {answer}: {result[:200]}]"
+
+
 # ── Social History ───────────────────────────────────────────────
 
 def _load_social_history() -> list:
@@ -382,11 +557,783 @@ def _format_history(history: list, limit: int = 20) -> str:
     return "\n".join(lines)
 
 
+def _count_actions(history: list) -> dict:
+    counts = {}
+    for e in history:
+        a = e.get("action", "?")
+        counts[a] = counts.get(a, 0) + 1
+    return counts
+
+
+def _summarize_feed(feed_raw: str, limit: int = 8) -> list:
+    """Extract readable 'author: title (upvotes)' rows from a feed/posts response."""
+    rows = []
+    try:
+        data = json.loads(feed_raw)
+    except (json.JSONDecodeError, ValueError):
+        return rows
+    posts = data.get("posts") or data.get("data") or []
+    for post in posts[:limit]:
+        author = (post.get("author") or {}).get("name") or "?"
+        title = (post.get("title") or post.get("content") or "")[:80]
+        up = post.get("upvotes") or 0
+        rows.append(f"    {author}: {title} (+{up})")
+    return rows
+
+
+def _summarize_comments_on_my_posts(limit: int = 6) -> list:
+    """Recent comments left on my own posts. Returns readable rows."""
+    c = get_client()
+    rows = []
+    try:
+        home = c._request("GET", "/home")
+        data = json.loads(home)
+    except (json.JSONDecodeError, ValueError):
+        return rows
+    activity = data.get("activity_on_your_posts") or []
+    for item in activity[:limit]:
+        post_id = item.get("post_id")
+        if not post_id:
+            continue
+        post_title = (item.get("post_title") or "my post")[:60]
+        try:
+            comments = _parse_comments(c.get_comments(post_id, "new", 100))
+        except Exception:
+            continue
+        for cm in comments[:2]:
+            author = (cm.get("author") or {}).get("name") or "?"
+            content = (cm.get("content") or "")[:70]
+            rows.append(f"    {author} on '{post_title}': {content}")
+    return rows
+
+
+def _summarize_topics() -> list:
+    """Topic pulse from trending searches. Returns readable rows."""
+    c = get_client()
+    rows = []
+    interests = ["ai", "data", "python", "llm", "security", "automation"]
+    for interest in interests:
+        try:
+            r = c.search(interest, "posts", 3)
+            data = json.loads(r)
+            posts = data.get("posts") or data.get("data") or []
+            if posts:
+                for post in posts[:2]:
+                    title = (post.get("title") or "")[:70]
+                    rows.append(f"    [{interest}] {title}")
+        except Exception:
+            continue
+    return rows
+
+
 # ── Autonomous Social Exploration ───────────────────────────────
 
 _SOCIAL_DAEMON_RUNNING = False
 _SOCIAL_DAEMON_THREAD: Optional[threading.Thread] = None
 _SOCIAL_DAEMON_INTERVAL = 1800  # 30 minutes between cycles
+
+# Rate-limit backoff state: when Moltbook returns a 429 (hourly comment/post cap),
+# we stop hammering the write endpoints for a while and log it only once.
+_RATE_LIMIT_UNTIL = 0.0  # epoch seconds until comment/post writes are paused
+_RATE_LIMIT_LOGGED = 0.0  # epoch seconds when the current backoff was reported
+
+
+def _mark_rate_limited(text: str) -> bool:
+    """Detect a 429 rate-limit response and start backoff. Returns True if detected."""
+    global _RATE_LIMIT_UNTIL
+    if not text or ("429" not in text):
+        return False
+    if "limit reached" in text.lower() or "too many" in text.lower() or "rate" in text.lower():
+        _RATE_LIMIT_UNTIL = time.time() + 3600  # hourly cap -> pause for the hour
+        return True
+    return False
+
+
+def _rate_limited() -> bool:
+    """True while write-actions should be paused due to a recent 429."""
+    return time.time() < _RATE_LIMIT_UNTIL
+
+
+def _rate_limit_report() -> str:
+    """Log the backoff start once and return a user-facing message."""
+    global _RATE_LIMIT_LOGGED
+    if time.time() - _RATE_LIMIT_LOGGED < 3600:
+        return ""
+    _RATE_LIMIT_LOGGED = time.time()
+    _social_log("rate_limited", "Moltbook 429 hit — write actions paused for ~1h", "")
+    return "  [RateLimit] Moltbook hourly limit reached — write actions paused for ~1 hour."
+
+
+def _rate_limit_remaining() -> str:
+    """Human-readable remaining backoff time, or '' if not limited."""
+    if not _rate_limited():
+        return ""
+    mins = int((_RATE_LIMIT_UNTIL - time.time()) // 60)
+    return f"{mins} min"
+
+# Optional hook for generating reply text. GRID's LLM backend sets this.
+REPLY_GENERATOR = None
+
+# Optional hook for generating a comment on someone else's post.
+COMMENT_GENERATOR = None
+
+# Optional hook that rewrites a raw digest into conversational prose.
+SUMMARY_GENERATOR = None
+
+# Optional hook that generates a new post for a submolt community.
+# Called as POST_GENERATOR(submolt_info: dict, sample_posts: list) -> (title, content)
+POST_GENERATOR = None
+
+
+def set_post_generator(fn):
+    """Set a callable(submolt_dict, sample_posts) -> (title, content) for the auto-post cycle."""
+    global POST_GENERATOR
+    POST_GENERATOR = fn
+
+
+def set_reply_generator(fn):
+    """Set a callable(comment_dict, post_title) -> reply_text used by auto-cycles."""
+    global REPLY_GENERATOR
+    REPLY_GENERATOR = fn
+
+
+def set_comment_generator(fn):
+    """Set a callable(post_dict) -> comment_text used by the auto-comment cycle."""
+    global COMMENT_GENERATOR
+    COMMENT_GENERATOR = fn
+
+
+def set_summary_generator(fn):
+    """Set a callable(raw_digest_str) -> prose used to make social summaries conversational."""
+    global SUMMARY_GENERATOR
+    SUMMARY_GENERATOR = fn
+
+
+def _load_replied() -> set:
+    try:
+        if os.path.exists(MOLTBOOK_REPLIED_FILE):
+            with open(MOLTBOOK_REPLIED_FILE, encoding="utf-8") as f:
+                return set(json.load(f))
+    except (json.JSONDecodeError, OSError, ValueError):
+        pass
+    return set()
+
+
+def _save_replied(ids: set):
+    with open(MOLTBOOK_REPLIED_FILE, "w", encoding="utf-8") as f:
+        json.dump(sorted(ids), f, indent=2)
+
+
+MOLTBOOK_COMMENTED_FILE = "moltbook_commented.json"
+
+
+def _load_commented() -> set:
+    try:
+        if os.path.exists(MOLTBOOK_COMMENTED_FILE):
+            with open(MOLTBOOK_COMMENTED_FILE, encoding="utf-8") as f:
+                return set(json.load(f))
+    except (json.JSONDecodeError, OSError, ValueError):
+        pass
+    return set()
+
+
+def _save_commented(ids: set):
+    with open(MOLTBOOK_COMMENTED_FILE, "w", encoding="utf-8") as f:
+        json.dump(sorted(ids), f, indent=2)
+
+
+MOLTBOOK_UPVOTED_FILE = "moltbook_upvoted.json"
+
+
+def _load_upvoted() -> set:
+    try:
+        if os.path.exists(MOLTBOOK_UPVOTED_FILE):
+            with open(MOLTBOOK_UPVOTED_FILE, encoding="utf-8") as f:
+                return set(json.load(f))
+    except (json.JSONDecodeError, OSError, ValueError):
+        pass
+    return set()
+
+
+def _save_upvoted(ids: set):
+    with open(MOLTBOOK_UPVOTED_FILE, "w", encoding="utf-8") as f:
+        json.dump(sorted(ids), f, indent=2)
+
+
+MOLTBOOK_FOLLOWED_FILE = "moltbook_followed.json"
+
+
+def _load_followed() -> set:
+    try:
+        if os.path.exists(MOLTBOOK_FOLLOWED_FILE):
+            with open(MOLTBOOK_FOLLOWED_FILE, encoding="utf-8") as f:
+                return set(json.load(f))
+    except (json.JSONDecodeError, OSError, ValueError):
+        pass
+    return set()
+
+
+def _save_followed(ids: set):
+    with open(MOLTBOOK_FOLLOWED_FILE, "w", encoding="utf-8") as f:
+        json.dump(sorted(ids), f, indent=2)
+
+
+MOLTBOOK_POSTED_FILE = "moltbook_posted.json"
+
+
+def _load_posted() -> set:
+    try:
+        if os.path.exists(MOLTBOOK_POSTED_FILE):
+            with open(MOLTBOOK_POSTED_FILE, encoding="utf-8") as f:
+                return set(json.load(f))
+    except (json.JSONDecodeError, OSError, ValueError):
+        pass
+    return set()
+
+
+def _save_posted(ids: set):
+    with open(MOLTBOOK_POSTED_FILE, "w", encoding="utf-8") as f:
+        json.dump(sorted(ids), f, indent=2)
+
+
+# ── Snapshot stats (time series) ────────────────────────────────
+
+def _load_stats() -> list:
+    try:
+        if os.path.exists(MOLTBOOK_STATS_FILE):
+            with open(MOLTBOOK_STATS_FILE, encoding="utf-8") as f:
+                return json.load(f)
+    except (json.JSONDecodeError, OSError, ValueError):
+        pass
+    return []
+
+
+def _save_stats(stats: list):
+    with open(MOLTBOOK_STATS_FILE, "w", encoding="utf-8") as f:
+        json.dump(stats, f, indent=2, ensure_ascii=False)
+
+
+def _own_post_ids(c) -> set:
+    """Find post IDs authored by me via /posts?author=<name>."""
+    ids = set()
+    name = c.agent_name
+    if not name:
+        return ids
+    try:
+        r = json.loads(c._request("GET", "/posts", params={"author": name, "limit": "50"}))
+        for p in (r.get("posts") or []):
+            pid = p.get("id") or p.get("post_id")
+            if pid:
+                ids.add(pid)
+    except Exception:
+        pass
+    return ids
+
+
+def _record_snapshot(c, prof: dict, feed_posts: list, commenter_counts: dict):
+    """Append one dated snapshot to social_stats.json for time-series analysis."""
+    try:
+        stats = _load_stats()
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        snap = {
+            "ts": now,
+            "karma": prof.get("karma"),
+            "followers": prof.get("follower_count"),
+            "following": prof.get("following_count"),
+            "posts": prof.get("posts_count"),
+            "comments": prof.get("comments_count"),
+            "feed_posts": len(feed_posts),
+            "feed_upvotes": int(sum(p.get("upvotes", 0) for p in feed_posts)),
+            "feed_comments": int(sum(p.get("comments", 0) for p in feed_posts)),
+            "comments_received": sum(commenter_counts.values()),
+            "unique_commenters": len(commenter_counts),
+        }
+        if stats and stats[-1].get("ts", "")[:16] == now[:16]:
+            stats[-1] = snap  # keep one per minute
+        else:
+            stats.append(snap)
+        if len(stats) > 1000:
+            stats = stats[-1000:]
+        _save_stats(stats)
+    except Exception:
+        pass
+
+
+def _trend_text(period: str = "all") -> str:
+    """Time-series summary of snapshots across day/week/month/all."""
+    stats = _load_stats()
+    if not stats:
+        return "No snapshot history yet. Run 'social analyze' a few times (across days) to build a trend."
+    from datetime import datetime as _dt, timedelta as _td
+    now = _dt.now()
+    cutoff = None
+    if period in ("day", "today", "24h"):
+        cutoff = now - _td(days=1)
+    elif period in ("week", "7d"):
+        cutoff = now - _td(days=7)
+    elif period in ("month", "30d"):
+        cutoff = now - _td(days=30)
+    elif period in ("year", "365d"):
+        cutoff = now - _td(days=365)
+    rows = []
+    for s in stats:
+        try:
+            t = _dt.strptime(s.get("ts", "")[:19], "%Y-%m-%d %H:%M:%S")
+        except ValueError:
+            continue
+        if cutoff and t < cutoff:
+            continue
+        rows.append(s)
+    if not rows:
+        return f"No snapshots in the last '{period}' period. Run 'social analyze' regularly to build history."
+    lines = []
+    lines.append(f"[bold cyan]MOLTBOOK TREND · {period}[/]  [dim]({len(rows)} snapshots)[/]")
+    lines.append("")
+    lines.append("[bold]PROFILE PROGRESSION[/]")
+    lines.append(f"  {'date':<17} {'karma':>5} {'fol':>4} {'fwg':>4} {'pst':>4} {'cmt':>5}")
+    for s in rows:
+        lines.append(
+            f"  {s.get('ts','')[:16]:<17} {str(s.get('karma')):>5} {str(s.get('followers')):>4} "
+            f"{str(s.get('following')):>4} {str(s.get('posts')):>4} {str(s.get('comments')):>5}"
+        )
+    if len(rows) >= 2:
+        first, last = rows[0], rows[-1]
+        delta = {}
+        for k in ("karma", "followers", "following", "posts", "comments", "feed_upvotes", "comments_received", "unique_commenters"):
+            fv, lv = first.get(k), last.get(k)
+            if isinstance(fv, int) and isinstance(lv, int):
+                delta[k] = lv - fv
+        lines.append("")
+        lines.append("[bold]DELTA (first -> last snapshot)[/]")
+        for k, v in delta.items():
+            arrow = "+" if v > 0 else ""
+            lines.append(f"  {k:<18} {v:+d}")
+    lines.append("")
+    lines.append("[bold]FEED / ENGAGEMENT (latest)[/]")
+    s = rows[-1]
+    lines.append(
+        f"  feed posts: {s.get('feed_posts')}   feed upvotes: {s.get('feed_upvotes')}   "
+        f"feed comments: {s.get('feed_comments')}"
+    )
+    lines.append(f"  comments received: {s.get('comments_received')}   unique commenters: {s.get('unique_commenters')}")
+    lines.append("")
+    lines.append("[dim]Tip: 'social trend week' or 'social trend 30d' for longer windows.[/]")
+    return "\n".join(lines)
+
+
+def _trend_panel(period: str = "all"):
+    """Green box time-series report."""
+    from rich.panel import Panel
+    from rich.text import Text
+    body = _trend_text(period)
+    return Panel(
+        Text.from_markup(body),
+        title="[bold green]MOLTBOOK TREND[/]",
+        border_style="green",
+        padding=(1, 1),
+    )
+
+
+def _parse_comments(raw: str) -> list:
+    """Flatten the comment tree from a get_comments response."""
+    try:
+        data = json.loads(raw)
+    except (json.JSONDecodeError, ValueError):
+        return []
+    comments = data.get("comments") or []
+    flat = []
+    def _walk(items, depth=0):
+        for cm in items:
+            flat.append(cm)
+            _walk(cm.get("replies") or [], depth + 1)
+    _walk(comments)
+    return flat
+
+
+def _reply_to_comment(comment: dict, post_title: str) -> Optional[str]:
+    """Generate + post a reply to a comment. Returns reply text or None."""
+    author = comment.get("author") or {}
+    author_id = author.get("id") or comment.get("author_id") or ""
+    name = author.get("name") or "there"
+    c = get_client()
+    if author_id and author_id == c.agent_id:
+        return None
+    content = comment.get("content", "")
+    if not content:
+        return None
+    if REPLY_GENERATOR:
+        try:
+            reply = REPLY_GENERATOR(comment, post_title)
+            if reply and reply.strip():
+                reply = reply.strip()[:1000]
+            else:
+                reply = ""
+        except Exception:
+            reply = ""
+    else:
+        reply = ""
+    if not reply:
+        reply = f"Thanks for the thoughtful comment, {name}! Glad you enjoyed it."
+    blocked = _guard_reply(reply)
+    if blocked:
+        _social_log("reply_blocked", f"Refused reply to {name}: {blocked}", "")
+        return None
+    if _rate_limited():
+        return None
+    result = c.create_comment(comment.get("post_id", ""), reply, parent_id=comment.get("id"))
+    if _mark_rate_limited(result):
+        _rate_limit_report()
+        return None
+    if '"success":true' in result or "created" in result.lower():
+        _social_log("reply", f"Auto-replied to {name} on '{post_title[:50]}'", f"{MOLTBOOK_BASE}/posts/{comment.get('post_id')}")
+        return reply
+    _social_log("reply_error", f"Auto-reply failed: {result[:200]}", "")
+    return None
+
+
+def _auto_reply_cycle() -> tuple[int, list]:
+    """Reply to new comments on MY OWN posts. Returns (count, lines)."""
+    c = get_client()
+    replied = _load_replied()
+    count = 0
+    lines = []
+    try:
+        own_posts = _own_post_ids(c)
+        home = c._request("GET", "/home")
+        data = json.loads(home)
+    except (json.JSONDecodeError, ValueError):
+        return 0, lines
+    if _rate_limited():
+        lines.append(f"  [Reply] skipped — rate-limited ({_rate_limit_remaining()})")
+        return 0, lines
+    activity = data.get("activity_on_your_posts") or []
+    for item in activity:
+        post_id = item.get("post_id")
+        post_title = item.get("post_title") or "my post"
+        if not post_id:
+            continue
+        # Only reply to comments on posts I authored — NOT posts where I merely commented.
+        if own_posts and post_id not in own_posts:
+            continue
+        try:
+            comments_raw = c.get_comments(post_id, "new", 100)
+            comments = _parse_comments(comments_raw)
+        except Exception as e:
+            lines.append(f"  [Comments] {post_id}: error {e}")
+            continue
+        for comment in comments:
+            if _rate_limited():
+                break
+            cid = comment.get("id")
+            if not cid or cid in replied:
+                continue
+            author = comment.get("author") or {}
+            if author.get("id") == c.agent_id:
+                continue
+            reply = _reply_to_comment(comment, post_title)
+            if reply:
+                replied.add(cid)
+                _save_replied(replied)
+                count += 1
+                lines.append(f"  [Reply] to {author.get('name')}: {reply[:70]}...")
+    if count == 0:
+        lines.append("  [Reply] no new comments to answer")
+    return count, lines
+
+
+def _auto_upvote_cycle(limit: int = 5) -> tuple[int, list]:
+    """Upvote interesting posts from the feed. Returns (count, lines)."""
+    c = get_client()
+    count = 0
+    lines = []
+    try:
+        feed = c.get_feed("home", "hot", 15)
+        data = json.loads(feed)
+    except (json.JSONDecodeError, ValueError):
+        return 0, lines
+    posts = data.get("posts") or data.get("data") or []
+    for post in posts:
+        if count >= limit:
+            break
+        pid = post.get("post_id") or post.get("id")
+        author = post.get("author") or {}
+        if author.get("id") == c.agent_id:
+            continue
+        upvotes = post.get("upvotes") or 0
+        if upvotes < 5:  # boost promising-but-young posts
+            result = c.upvote_post(pid)
+            if '"success":true' in result or "error" not in result.lower():
+                count += 1
+                lines.append(f"  [Upvote] {post.get('title','')[:60]}")
+                _social_log("upvote", f"Auto-upvoted '{post.get('title','')[:50]}'", f"{MOLTBOOK_BASE}/posts/{pid}")
+    if count == 0:
+        lines.append("  [Upvote] nothing to upvote this cycle")
+    return count, lines
+
+
+def _auto_comment_cycle(limit: int = 3) -> tuple[int, list]:
+    """Comment on interesting posts from other agents. Returns (count, lines)."""
+    c = get_client()
+    if not COMMENT_GENERATOR:
+        return 0, ["  [Comment] no comment generator wired — skipped"]
+    commented = _load_commented()
+    count = 0
+    lines = []
+    try:
+        feed = c.get_feed("home", "hot", 20)
+        data = json.loads(feed)
+    except (json.JSONDecodeError, ValueError):
+        return 0, ["  [Comment] feed unavailable"]
+    if _rate_limited():
+        return 0, [f"  [Comment] skipped — rate-limited ({_rate_limit_remaining()})"]
+    posts = data.get("posts") or data.get("data") or []
+    for post in posts:
+        if count >= limit:
+            break
+        if _rate_limited():
+            break
+        pid = post.get("post_id") or post.get("id")
+        if not pid or pid in commented:
+            continue
+        author = post.get("author") or {}
+        if author.get("id") == c.agent_id:
+            continue
+        title = post.get("title") or ""
+        content = post.get("content") or ""
+        if not title and not content:
+            continue
+        try:
+            comment = COMMENT_GENERATOR(post)
+            if comment and comment.strip():
+                comment = comment.strip()[:1000]
+            else:
+                continue
+        except Exception:
+            continue
+        blocked = _guard_reply(comment)
+        if blocked:
+            _social_log("comment_blocked", f"Refused comment on '{title[:50]}': {blocked}", "")
+            continue
+        result = c.create_comment(pid, comment)
+        if _mark_rate_limited(result):
+            lines.append(_rate_limit_report() or f"  [Comment] stopped — rate-limited ({_rate_limit_remaining()})")
+            break
+        if '"success":true' in result or "created" in result.lower():
+            commented.add(pid)
+            _save_commented(commented)
+            count += 1
+            lines.append(f"  [Comment] on '{title[:60]}': {comment[:70]}...")
+            _social_log("comment", f"Commented on '{title[:50]}'", f"{MOLTBOOK_BASE}/posts/{pid}")
+        else:
+            lines.append(f"  [Comment] failed on '{title[:40]}': {result[:120]}")
+    if count == 0:
+        lines.append("  [Comment] nothing new to comment on")
+    return count, lines
+
+
+def _auto_comment_upvote_cycle(limit: int = 5) -> tuple[int, list]:
+    """Upvote promising comments left on my posts. Returns (count, lines)."""
+    c = get_client()
+    upvoted = _load_upvoted()
+    count = 0
+    lines = []
+    try:
+        home = c._request("GET", "/home")
+        data = json.loads(home)
+    except (json.JSONDecodeError, ValueError):
+        return 0, ["  [CommentUpvote] home unavailable"]
+    activity = data.get("activity_on_your_posts") or []
+    for item in activity:
+        post_id = item.get("post_id")
+        if not post_id:
+            continue
+        try:
+            comments = _parse_comments(c.get_comments(post_id, "new", 100))
+        except Exception:
+            continue
+        for comment in comments:
+            if count >= limit:
+                break
+            cid = comment.get("id")
+            if not cid or cid in upvoted:
+                continue
+            author = comment.get("author") or {}
+            if author.get("id") == c.agent_id:
+                continue
+            upvotes = comment.get("upvotes") or 0
+            if upvotes >= 5:  # already well-received
+                continue
+            result = c.upvote_comment(cid)
+            if '"success":true' in result or "error" not in result.lower():
+                upvoted.add(cid)
+                _save_upvoted(upvoted)
+                count += 1
+                lines.append(f"  [CommentUpvote] {author.get('name','')} ({comment.get('content','')[:50]}...)")
+                _social_log("comment_upvote", f"Upvoted comment by {author.get('name','')}", f"{MOLTBOOK_BASE}/posts/{post_id}")
+    if count == 0:
+        lines.append("  [CommentUpvote] nothing new to upvote")
+    return count, lines
+
+
+def _auto_follow_cycle(limit: int = 5) -> tuple[int, list]:
+    """Follow active agents spotted in the feed. Returns (count, lines)."""
+    c = get_client()
+    followed = _load_followed()
+    count = 0
+    lines = []
+    try:
+        feed = c.get_feed("home", "hot", 20)
+        data = json.loads(feed)
+    except (json.JSONDecodeError, ValueError):
+        return 0, ["  [Follow] feed unavailable"]
+    posts = data.get("posts") or data.get("data") or []
+    seen = set()
+    for post in posts:
+        if count >= limit:
+            break
+        author = post.get("author") or {}
+        aid = author.get("id")
+        name = author.get("name")
+        if not (aid or name):
+            continue
+        if author.get("id") == c.agent_id:
+            continue
+        key = aid or name
+        if key in followed or key in seen:
+            continue
+        seen.add(key)
+        target = name or aid
+        result = c.follow(target)
+        if '"success":true' in result or "error" not in result.lower():
+            followed.add(key)
+            _save_followed(followed)
+            count += 1
+            lines.append(f"  [Follow] {name or aid}")
+            _social_log("follow", f"Auto-followed agent '{name or aid}'", "")
+        else:
+            lines.append(f"  [Follow] failed on {name or aid}: {result[:120]}")
+    if count == 0:
+        lines.append("  [Follow] nothing new to follow")
+    return count, lines
+
+
+# Interests TinaGrid cares about, used to rank which submolt community to post to.
+AUTO_POST_INTERESTS = (
+    "osint", "open source intelligence", "security", "pentest", "ctf", "exploit",
+    "agent", "automation", "research", "intelligence", "surveillance", "recon",
+    "ai", "llm", "machine learning", "deep learning", "networking", "network",
+    "radio", "sdr", "satellite", "satellite tracking", "computer vision", "vision",
+    "memory", "build", "architecture", "data", "python", "coding", "autonomous",
+)
+
+
+def _score_submolt(sm: dict) -> int:
+    """Rank a submolt against TinaGrid's interests for auto-posting."""
+    hay = " ".join([
+        str(sm.get("name", "")),
+        str(sm.get("display_name", "")),
+        str(sm.get("description", "")),
+    ]).lower()
+    score = 0
+    for kw in AUTO_POST_INTERESTS:
+        if kw in hay:
+            score += 2
+    # Slight bonus for active communities
+    score += int(sm.get("post_count") or 0) // 500
+    return score
+
+
+def _auto_post_cycle(limit: int = 1) -> tuple[int, list]:
+    """Post one original, community-aware post to a relevant submolt. Returns (count, lines)."""
+    c = get_client()
+    if not POST_GENERATOR:
+        return 0, ["  [Post] no post generator wired — skipped"]
+    posted = _load_posted()
+    count = 0
+    lines = []
+    if _rate_limited():
+        return 0, [f"  [Post] skipped — rate-limited ({_rate_limit_remaining()})"]
+    try:
+        raw = c.list_submolts(sort="popular", limit=50)
+        data = json.loads(raw)
+    except (json.JSONDecodeError, ValueError):
+        return 0, ["  [Post] submolt list unavailable"]
+    submolts = data.get("submolts") or data.get("data") or []
+    if not submolts:
+        return 0, ["  [Post] no submolts found"]
+
+    candidates = []
+    for sm in submolts:
+        name = sm.get("name")
+        if not name or name in ("general", "announcements"):
+            continue
+        if sm.get("is_nsfw") or sm.get("is_private"):
+            continue
+        if name in posted:
+            continue
+        candidates.append(sm)
+
+    if not candidates:
+        return 0, ["  [Post] already posted in every suitable submolt — nothing new"]
+
+    candidates.sort(key=_score_submolt, reverse=True)
+    sm = candidates[0]
+    sm_name = sm.get("name")
+    sm_title = sm.get("display_name") or sm_name
+
+    # Sample recent posts so the generator can match the community's tone/topics.
+    sample_posts = []
+    try:
+        feed = json.loads(c.get_posts(sort="hot", limit=6, submolt=sm_name))
+        for p in (feed.get("posts") or feed.get("data") or []):
+            sample_posts.append({
+                "author": (p.get("author") or {}).get("name") or "?",
+                "title": (p.get("title") or "")[:200],
+                "content": (p.get("content") or "")[:300],
+            })
+    except Exception:
+        pass
+
+    submolt_info = {
+        "name": sm_name,
+        "display_name": sm_title,
+        "description": (sm.get("description") or "")[:300],
+        "subscriber_count": sm.get("subscriber_count") or 0,
+        "post_count": sm.get("post_count") or 0,
+    }
+
+    try:
+        gen = POST_GENERATOR(submolt_info, sample_posts)
+        if not gen or not isinstance(gen, (tuple, list)) or len(gen) < 2:
+            return 0, ["  [Post] generator returned nothing usable"]
+        title, content = gen[0].strip(), gen[1].strip()
+        if not title or not content:
+            return 0, ["  [Post] generator returned empty post"]
+        title = title[:200]
+        content = content[:2000]
+    except Exception as e:
+        return 0, [f"  [Post] generator error: {e}"]
+
+    blocked = _guard_reply(title + "\n" + content)
+    if blocked:
+        _social_log("post_blocked", f"Refused auto-post containing secrets: {blocked}", "")
+        return 0, [f"  [Post] blocked — content looks like it contains a credential ({blocked})"]
+
+    result = c.create_post(title, content, sm_name)
+    if _mark_rate_limited(result):
+        lines.append(_rate_limit_report() or f"  [Post] stopped — rate-limited ({_rate_limit_remaining()})")
+        return count, lines
+    if '"success":true' in result or '"success": true' in result or "created" in result.lower():
+        posted.add(sm_name)
+        _save_posted(posted)
+        count += 1
+        post_id = _extract_id(result)
+        link = f"{MOLTBOOK_BASE}/posts/{post_id}" if post_id else ""
+        lines.append(f"  [Post] new post in '{sm_title}': {title[:70]}")
+        _social_log("post", f"Auto-posted in submolt '{sm_name}': {title[:60]}", link)
+    else:
+        lines.append(f"  [Post] failed in '{sm_name}': {result[:150]}")
+    return count, lines
 
 
 def _ensure_ready() -> tuple[bool, str]:
@@ -415,6 +1362,12 @@ def _run_auto_cycle() -> str:
     persona = _get_persona()
     lines = []
     lines.append(f"GRID social auto-cycle — persona: {persona}, agent: {c.agent_name}")
+    if _rate_limited():
+        lines.append(f"  [RateLimit] write actions paused ({_rate_limit_remaining()} remaining) — read-only checks continue")
+
+    # Phase 0: reply to new comments on my posts
+    reply_count, reply_lines = _auto_reply_cycle()
+    lines.extend(reply_lines)
 
     # Phase 1: check feed
     try:
@@ -423,7 +1376,27 @@ def _run_auto_cycle() -> str:
     except Exception as e:
         lines.append(f"  [Feed] error: {e}")
 
-    # Phase 2: search topics
+    # Phase 2: upvote promising posts
+    up_count, up_lines = _auto_upvote_cycle(5)
+    lines.extend(up_lines)
+
+    # Phase 3: comment on interesting posts by other agents
+    cm_count, cm_lines = _auto_comment_cycle(3)
+    lines.extend(cm_lines)
+
+    # Phase 4: upvote promising comments on my posts
+    cu_count, cu_lines = _auto_comment_upvote_cycle(5)
+    lines.extend(cu_lines)
+
+    # Phase 5: follow active agents from the feed
+    fl_count, fl_lines = _auto_follow_cycle(5)
+    lines.extend(fl_lines)
+
+    # Phase 6: post one original, community-aware post to a relevant submolt
+    po_count, po_lines = _auto_post_cycle(1)
+    lines.extend(po_lines)
+
+    # Phase 7: search topics
     interests = ["ai", "data", "python", "coding", "llm", "machine learning", "automation", "tech"]
     hits = 0
     for interest in interests:
@@ -435,14 +1408,22 @@ def _run_auto_cycle() -> str:
             pass
     lines.append(f"  [Search] scanned {hits} topics / {len(interests)}")
 
-    # Phase 3: list submolts
+    # Phase 8: list submolts
     try:
         c.list_submolts(sort="popular", limit=5)
         lines.append(f"  [Submolts] checked trending communities")
     except Exception as e:
         lines.append(f"  [Submolts] error: {e}")
 
-    _social_log("auto_cycle", f"Feed + search (topics: {hits}) + submolts", "")
+    # Phase 9: record a dated snapshot for the time-series trend report
+    try:
+        data = _collect_analyze_data()
+        cc = data["commenter_counts"]
+        lines.append(f"  [Trend] snapshot saved — comments received: {sum(cc.values())}, unique commenters: {len(cc)}")
+    except Exception as e:
+        lines.append(f"  [Trend] snapshot failed: {e}")
+
+    _social_log("auto_cycle", f"Replies: {reply_count}, upvotes: {up_count}, comments: {cm_count}, comment-upvotes: {cu_count}, follows: {fl_count}, posts: {po_count}, feed + search (topics: {hits}) + submolts + snapshot", "")
     lines.append(f"  All logged. Use 'social history' to review.")
     return "\n".join(lines)
 
@@ -512,8 +1493,10 @@ def _social_help() -> str:
   posts [sort] [limit] [submolt]          — List posts
   post <post_id>                          — Get a single post
   search <query> [type] [limit]           — Search (type: all/posts/comments/agents)
-  upvote <post_id|comment_id>             — Upvote a post or comment
-  downvote <post_id|comment_id>           — Downvote a post or comment
+  upvote <post_id>                        — Upvote a post
+  downvote <post_id>                      — Downvote a post
+  upvote_comment <comment_id>             — Upvote a comment
+  downvote_comment <comment_id>           — Downvote a comment
   submolts [sort] [limit]                 — List communities
   subscribe <submolt>                     — Join a community
   unsubscribe <submolt>                   — Leave a community
@@ -521,9 +1504,17 @@ def _social_help() -> str:
   unfollow <agent_name>                   — Unfollow an agent
   agents                                  — List locally registered agents
   switch <agent_name>                     — Switch active agent
+  status                                  — Check agent claim status (pending_claim/claimed)
+  verify <code> <answer>                  — Submit answer to an AI verification challenge
   auto                                    — Run one autonomous exploration cycle now
+                                          (replies, upvotes, comments, follows, + 1 new post
+                                          in a relevant submolt community)
+  engage                                  — Reply to new comments + upvote promising posts now
   auto-daemon [on|off]                    — Background daemon: GRID explores every ~30 min
   history [limit]                         — Show past social activity log with links
+  summary                                 — Plain-language digest: my activity + hot topics
+  analyze                                 — Pandas data report: stats + tables on feed/engagement
+  trend [day|week|month|year|all]         — Time-series report from saved snapshots
   help                                    — Show this help
 
 NOTE: register, post, reply, vote, subscribe, unfollow, follow, switch
@@ -531,6 +1522,341 @@ require a GRID persona. Set it first: persona set <your_username>
 
 All posts, comments, votes, follows are automatically logged to history.
 Use 'social history' anytime to review what GRID has done."""
+
+
+def _collect_analyze_data() -> dict:
+    """Fetch profile + feed + engagement once, reused by text and Panel reports."""
+    c = get_client()
+    persona = _get_persona() or c.agent_name or "me"
+    prof = {}
+    feed_posts = []
+    commenter_counts = {}
+    own_post_ids = set()
+    try:
+        prof = json.loads(c.profile()).get("agent") or {}
+    except Exception:
+        pass
+    try:
+        data = json.loads(c.get_feed("home", "hot", 25))
+        posts = data.get("posts") or data.get("data") or []
+        for p in posts:
+            feed_posts.append({
+                "author": (p.get("author") or {}).get("name") or "?",
+                "title": (p.get("title") or "")[:200],
+                "upvotes": p.get("upvotes") or 0,
+                "comments": p.get("comments_count") or p.get("num_comments") or 0,
+            })
+    except Exception:
+        pass
+    # Only count comments on MY OWN posts (not replies to my comments elsewhere)
+    try:
+        own_post_ids = _own_post_ids(c)
+    except Exception:
+        pass
+    try:
+        home = json.loads(c._request("GET", "/home"))
+        for item in (home.get("activity_on_your_posts") or []):
+            pid = item.get("post_id")
+            if not pid or (own_post_ids and pid not in own_post_ids):
+                continue
+            try:
+                for cm in _parse_comments(c.get_comments(pid, "new", 100)):
+                    nm = (cm.get("author") or {}).get("name")
+                    if nm and nm.lower() != persona.lower():
+                        commenter_counts[nm] = commenter_counts.get(nm, 0) + 1
+            except Exception:
+                continue
+    except Exception:
+        pass
+    _record_snapshot(c, prof, feed_posts, commenter_counts)
+    return {"persona": persona, "prof": prof, "feed_posts": feed_posts, "commenter_counts": commenter_counts}
+
+
+def _social_analyze() -> str:
+    """Pandas-powered report: stats + tables on feed posts, commenters, and my profile."""
+    data = _collect_analyze_data()
+    persona = data["persona"]
+    prof = data["prof"]
+    feed_posts = data["feed_posts"]
+    commenter_counts = data["commenter_counts"]
+
+    lines = []
+    lines.append(f"[bold cyan]═══ MOLTBOOK ANALYSIS · {persona} ═══[/]")
+
+    try:
+        import pandas as pd
+        import numpy as np
+    except ImportError:
+        return "Error: pandas is required for 'social analyze'. Run: pip install pandas numpy"
+
+    # 1. Profile card
+    lines.append("\n[bold][1] PROFILE CARD[/]")
+    if prof:
+        lines.append(
+            f"    [dim]karma     = [/][cyan]{prof.get('karma')}[/]   "
+            f"[dim]followers = [/][cyan]{prof.get('follower_count')}[/]   "
+            f"[dim]following = [/][cyan]{prof.get('following_count')}[/]"
+        )
+        lines.append(
+            f"    [dim]posts     = [/][cyan]{prof.get('posts_count')}[/]   "
+            f"[dim]comments written = [/][cyan]{prof.get('comments_count')}[/]"
+        )
+    else:
+        lines.append("    (unavailable)")
+
+    # 2. Feed stats
+    lines.append("\n[bold][2] FEED SNAPSHOT[/] [dim](top 25 hot posts)[/]")
+    if feed_posts:
+        df = pd.DataFrame(feed_posts)
+        n = len(df)
+        total = int(df['upvotes'].sum())
+        mean = df['upvotes'].mean()
+        med = df['upvotes'].median()
+        mx = int(df['upvotes'].max())
+        lines.append(f"    [dim]posts sampled  = [/][cyan]{n}[/]   [dim]total upvotes = [/][cyan]{total}[/]")
+        lines.append(f"    [dim]mean upvotes   = [/][cyan]{mean:.1f}[/]   [dim]median = [/][cyan]{med:.0f}[/]   [dim]max = [/][cyan]{mx}[/]")
+        if "comments" in df and df["comments"].sum() > 0:
+            lines.append(f"    [dim]total comments = [/][cyan]{int(df['comments'].sum())}[/]")
+        lines.append("    [bold]TOP POSTS BY UPVOTES:[/]")
+        for i, (_, r) in enumerate(df.sort_values("upvotes", ascending=False).head(5).iterrows(), 1):
+            lines.append(f"      [dim]{i}.[/] [yellow]+{int(r['upvotes']):>4}[/]  [bold]{r['author']}[/]: {r['title']}")
+        by_author = df.groupby("author")["upvotes"].agg(["count", "sum", "mean"]).sort_values("sum", ascending=False)
+        lines.append("    [bold]TOP AUTHORS:[/] [dim](posts / total upvotes / avg)[/]")
+        for i, (a, row) in enumerate(by_author.head(5).iterrows(), 1):
+            lines.append(f"      [dim]{i}.[/] [bold]{a}[/]: [cyan]{int(row['count'])}[/] posts, [cyan]{int(row['sum'])}[/] upvotes, avg [cyan]{row['mean']:.1f}[/]")
+    else:
+        lines.append("    (no feed data)")
+
+    # 3. My engagement
+    lines.append("\n[bold][3] ENGAGEMENT ON MY POSTS[/]")
+    if commenter_counts:
+        total = sum(commenter_counts.values())
+        lines.append(f"    [dim]total comments received = [/][cyan]{total}[/]   [dim]unique commenters = [/][cyan]{len(commenter_counts)}[/]")
+        lines.append("    [bold]TOP COMMENTERS:[/]")
+        for i, (name, cnum) in enumerate(sorted(commenter_counts.items(), key=lambda kv: -kv[1])[:5], 1):
+            bar = "=" * min(cnum, 20)
+            lines.append(f"      [dim]{i}.[/] [bold]{name}[/]: [cyan]{cnum}[/] [dim]{bar}[/]")
+    else:
+        lines.append("    (no comments on my posts yet)")
+
+    lines.append("\n[dim]Tip: 'social summary' for a digest, 'social history' for the full log.[/]")
+    return "\n".join(lines)
+
+
+def _analyze_panel():
+    """Rich Panel + Tables report (green box, dated, full post titles)."""
+    from rich.panel import Panel
+    from rich.table import Table
+    from rich.text import Text
+    from rich.console import Group
+    from datetime import datetime
+
+    data = _collect_analyze_data()
+    persona = data["persona"]
+    prof = data["prof"]
+    feed_posts = data["feed_posts"]
+    commenter_counts = data["commenter_counts"]
+
+    try:
+        import pandas as pd
+    except ImportError:
+        return Panel("pandas required: pip install pandas numpy", border_style="green")
+
+    now = datetime.now().strftime("%Y-%m-%d %H:%M")
+    inner = []
+
+    # Profile card table
+    p = Table(box=None, show_header=False, expand=False, padding=(0, 2))
+    p.add_column(style="dim", no_wrap=True)
+    p.add_column(style="bold green")
+    if prof:
+        p.add_row("karma", str(prof.get("karma")))
+        p.add_row("followers", str(prof.get("follower_count")))
+        p.add_row("following", str(prof.get("following_count")))
+        p.add_row("posts", str(prof.get("posts_count")))
+        p.add_row("comments written", str(prof.get("comments_count")))
+    inner.append(Text("\n[1] PROFILE CARD", style="bold"))
+    inner.append(p)
+
+    # Feed snapshot
+    inner.append(Text("\n[2] FEED SNAPSHOT  (top 25 hot posts)", style="bold"))
+    if feed_posts:
+        df = pd.DataFrame(feed_posts)
+        stats = Table(box=None, show_header=False, expand=False, padding=(0, 2))
+        stats.add_column(style="dim", no_wrap=True)
+        stats.add_column(style="green")
+        stats.add_row("posts sampled", str(len(df)))
+        stats.add_row("total upvotes", str(int(df["upvotes"].sum())))
+        stats.add_row("mean upvotes", f"{df['upvotes'].mean():.1f}")
+        stats.add_row("median upvotes", str(int(df["upvotes"].median())))
+        stats.add_row("max upvotes", str(int(df["upvotes"].max())))
+        if df["comments"].sum() > 0:
+            stats.add_row("total comments", str(int(df["comments"].sum())))
+        inner.append(stats)
+
+        top = df.sort_values("upvotes", ascending=False).head(5)
+        tpost = Table(title="TOP POSTS BY UPVOTES", title_justify="left", box=None, padding=(0, 2))
+        tpost.add_column("#", style="dim", no_wrap=True)
+        tpost.add_column("Up", style="yellow", justify="right", no_wrap=True)
+        tpost.add_column("Author", style="bold green", no_wrap=True)
+        tpost.add_column("Title", overflow="fold")
+        for i, (_, r) in enumerate(top.iterrows(), 1):
+            tpost.add_row(str(i), str(int(r["upvotes"])), r["author"], r["title"])
+        inner.append(tpost)
+
+        by_author = df.groupby("author")["upvotes"].agg(["count", "sum", "mean"]).sort_values("sum", ascending=False).head(5)
+        tauth = Table(title="TOP AUTHORS", title_justify="left", box=None, padding=(0, 2))
+        tauth.add_column("Author", style="bold green", no_wrap=True)
+        tauth.add_column("Posts", style="green", justify="right")
+        tauth.add_column("Total up", style="green", justify="right")
+        tauth.add_column("Avg", style="green", justify="right")
+        for a, row in by_author.iterrows():
+            tauth.add_row(a, str(int(row["count"])), str(int(row["sum"])), f"{row['mean']:.1f}")
+        inner.append(tauth)
+    else:
+        inner.append(Text("(no feed data)", style="dim"))
+
+    # Engagement
+    inner.append(Text("\n[3] ENGAGEMENT ON MY POSTS", style="bold"))
+    if commenter_counts:
+        tot = sum(commenter_counts.values())
+        info = Table(box=None, show_header=False, expand=False, padding=(0, 2))
+        info.add_column(style="dim", no_wrap=True)
+        info.add_column(style="green")
+        info.add_row("comments received", str(tot))
+        info.add_row("unique commenters", str(len(commenter_counts)))
+        inner.append(info)
+
+        tc = Table(box=None, padding=(0, 2))
+        tc.add_column("#", style="dim", no_wrap=True)
+        tc.add_column("Commenter", style="bold green", no_wrap=True)
+        tc.add_column("Count", style="green", justify="right", no_wrap=True)
+        tc.add_column("", overflow="fold")
+        for i, (name, n) in enumerate(sorted(commenter_counts.items(), key=lambda kv: -kv[1])[:5], 1):
+            tc.add_row(str(i), name, str(n), "=" * min(n, 20))
+        inner.append(tc)
+    else:
+        inner.append(Text("(no comments on my posts yet)", style="dim"))
+
+    inner.append(Text("\nTip: 'social summary' for a digest, 'social history' for the full log.", style="dim"))
+    return Panel(
+        Group(*inner),
+        title=f"[bold green]MOLTBOOK ANALYSIS · {persona}[/]",
+        subtitle=Text(now, style="dim"),
+        border_style="green",
+        padding=(1, 1),
+    )
+
+
+def _summary_panel():
+    """Green box wrapping the summary text (conversational prose when LLM is wired)."""
+    from rich.panel import Panel
+    from rich.text import Text
+    from datetime import datetime
+
+    persona = _get_persona() or get_client().agent_name or "me"
+    now = datetime.now().strftime("%Y-%m-%d %H:%M")
+    body = _social_summary()
+    return Panel(
+        Text.from_markup(body),
+        title=f"[bold green]MOLTBOOK SUMMARY · {persona}[/]",
+        subtitle=Text(now, style="dim"),
+        border_style="green",
+        padding=(1, 1),
+    )
+
+
+def social_report(sub: str):
+    """Return a Rich Panel renderable for summary/analyze/trend, or None to fall back to text."""
+    kind = sub.strip().split(maxsplit=1)[0].lower()
+    rest = sub.strip()[len(kind):].strip() if len(sub.strip()) > len(kind) else ""
+    if kind in ("summary", "digest", "status_report", "whats_up"):
+        return _summary_panel()
+    if kind in ("analyze", "analysis", "report", "stats"):
+        return _analyze_panel()
+    if kind in ("trend", "progress", "timeline", "timeseries"):
+        return _trend_panel(rest or "all")
+    return None
+
+
+def _social_summary() -> str:
+    """Plain-language digest of my recent activity + current Moltbook topics."""
+    c = get_client()
+    persona = _get_persona() or c.agent_name or "me"
+    history = _load_social_history()
+    counts = _count_actions(history)
+
+    lines = []
+    lines.append(f"[bold cyan]═══ MOLTBOOK SUMMARY · {persona} ═══[/]")
+
+    # 0. Live profile stats (always fresh, never empty)
+    lines.append("\n[bold][1] MY PROFILE[/] [dim](live)[/]")
+    try:
+        prof = json.loads(c.profile()).get("agent") or {}
+        lines.append(
+            f"  [dim]karma[/] [cyan]{prof.get('karma')}[/] · "
+            f"[dim]followers[/] [cyan]{prof.get('follower_count')}[/] · "
+            f"[dim]following[/] [cyan]{prof.get('following_count')}[/] · "
+            f"[dim]posts[/] [cyan]{prof.get('posts_count')}[/] · "
+            f"[dim]comments written[/] [cyan]{prof.get('comments_count')}[/]"
+        )
+    except Exception:
+        lines.append("  (profile unavailable)")
+
+    # 1. What have I done recently?
+    lines.append("\n[bold][2] MY RECENT ACTIVITY[/]")
+    if not history:
+        lines.append("  [dim](log empty - profile stats above are live)[/]")
+    else:
+        top = sorted(counts.items(), key=lambda kv: -kv[1])
+        bits = ", ".join(f"[cyan]{k}={v}[/]" for k, v in top[:6])
+        lines.append(f"  Totals: {bits}")
+        for e in history[-6:][::-1]:
+            ts = e.get("timestamp", "")[:16]
+            a = e.get("action", "?")
+            d = e.get("details", "")
+            lines.append(f"    [dim]{ts}[/] [bold]{a}[/]: {d[:90]}")
+
+    # 2. What's being discussed right now (feed)
+    lines.append("\n[bold][3] HOT TOPICS ON THE FEED[/]")
+    try:
+        rows = _summarize_feed(c.get_feed("home", "hot", 12))
+        if rows:
+            lines.extend(rows)
+        else:
+            lines.append("  [dim](feed unavailable)[/]")
+    except Exception as e:
+        lines.append(f"  [dim](feed error: {e})[/]")
+
+    # 3. Conversations on my posts
+    lines.append("\n[bold][4] RECENT COMMENTS ON MY POSTS[/]")
+    rows = _summarize_comments_on_my_posts(6)
+    if rows:
+        lines.extend(rows)
+    else:
+        lines.append("  [dim](none)[/]")
+
+    # 4. Topic pulse
+    lines.append("\n[bold][5] TRENDING TOPICS[/] [dim](search pulse)[/]")
+    rows = _summarize_topics()
+    if rows:
+        lines.extend(rows)
+    else:
+        lines.append("  [dim](none)[/]")
+
+    lines.append("\n[dim]Tip: 'social history' for full log, 'social analyze' for a data report.[/]")
+    digest = "\n".join(lines)
+
+    if SUMMARY_GENERATOR:
+        try:
+            import re as _re
+            plain = _re.sub(r"\[/?[a-zA-Z0-9 #_.-]*\]", "", digest)
+            prose = SUMMARY_GENERATOR(plain)
+            if prose and prose.strip():
+                return prose.strip()
+        except Exception:
+            pass
+    return digest
 
 
 def moltbook_social(input_str: str) -> str:
@@ -545,6 +1871,11 @@ def moltbook_social(input_str: str) -> str:
     if cmd == "auto":
         return social_auto(args)
 
+    if cmd == "engage":
+        r = _auto_reply_cycle()
+        u = _auto_upvote_cycle(5)
+        return "\n".join([f"Replies: {r[0]}", *r[1], f"Upvotes: {u[0]}", *u[1]])
+
     if cmd in ("auto-daemon", "autodaemon", "daemon"):
         return social_daemon(args)
 
@@ -554,6 +1885,15 @@ def moltbook_social(input_str: str) -> str:
             limit = int(args.strip())
         history = _load_social_history()
         return _format_history(history, limit)
+
+    if cmd in ("summary", "digest", "status_report", "whats_up"):
+        return _social_summary()
+
+    if cmd in ("analyze", "analysis", "report", "stats"):
+        return _social_analyze()
+
+    if cmd in ("trend", "progress", "timeline", "timeseries"):
+        return _trend_text(args.strip() or "all")
 
     if cmd == "persona":
         if not args.strip():
@@ -599,11 +1939,16 @@ def moltbook_social(input_str: str) -> str:
         if "|" in args:
             pipe_parts = [x.strip() for x in args.split("|", 2)]
             if len(pipe_parts) >= 3:
-                result = c.create_post(pipe_parts[1], pipe_parts[2], pipe_parts[0])
+                content = pipe_parts[2]
+                blocked = _guard_reply(content)
+                if blocked:
+                    _social_log("post_blocked", f"Refused post containing secrets: {blocked}", "")
+                    return f"Blocked: post content looks like it contains a credential ({blocked}). Refusing to publish."
+                result = c.create_post(pipe_parts[1], content, pipe_parts[0])
                 post_id = _extract_id(result)
                 link = f"{MOLTBOOK_BASE}/posts/{post_id}" if post_id else ""
                 _social_log("post", f"Posted '{pipe_parts[1]}' in submolt '{pipe_parts[0]}'", link)
-                return result
+                return auto_verify_response(result)
             return "Usage: post <submolt> | <title> | <content>"
         return c.get_post(args.strip())
 
@@ -613,10 +1958,14 @@ def moltbook_social(input_str: str) -> str:
         if "|" not in args:
             return "Usage: reply <post_id> | <content>"
         pid, _, content = args.partition("|")
+        blocked = _guard_reply(content.strip())
+        if blocked:
+            _social_log("reply_blocked", f"Refused reply containing secrets: {blocked}", "")
+            return f"Blocked: reply content looks like it contains a credential ({blocked}). Refusing to post."
         result = c.create_comment(pid.strip(), content.strip())
         link = f"{MOLTBOOK_BASE}/posts/{pid.strip()}"
         _social_log("reply", f"Replied to post {pid.strip()}", link)
-        return result
+        return auto_verify_response(result)
 
     if cmd == "reply_to":
         if err:
@@ -624,9 +1973,13 @@ def moltbook_social(input_str: str) -> str:
         if "|" not in args:
             return "Usage: reply_to <comment_id> | <content>"
         cid, _, content = args.partition("|")
+        blocked = _guard_reply(content.strip())
+        if blocked:
+            _social_log("reply_blocked", f"Refused reply_to containing secrets: {blocked}", "")
+            return f"Blocked: reply content looks like it contains a credential ({blocked}). Refusing to post."
         result = c.reply_comment(cid.strip(), content.strip())
         _social_log("reply_to", f"Replied to comment {cid.strip()}", "")
-        return result
+        return auto_verify_response(result)
 
     if cmd == "comments":
         ca = args.split()
@@ -695,6 +2048,22 @@ def moltbook_social(input_str: str) -> str:
             _social_log("downvote", f"Downvoted {args.strip()}", "")
         return result
 
+    if cmd == "upvote_comment":
+        if err:
+            return err
+        result = c.upvote_comment(args.strip())
+        if "error" not in result.lower():
+            _social_log("comment_upvote", f"Upvoted comment {args.strip()}", "")
+        return result
+
+    if cmd == "downvote_comment":
+        if err:
+            return err
+        result = c.downvote_comment(args.strip())
+        if "error" not in result.lower():
+            _social_log("comment_downvote", f"Downvoted comment {args.strip()}", "")
+        return result
+
     if cmd == "submolts":
         sa = args.split()
         sort = sa[0] if sa and sa[0] in ("popular", "new", "growing") else "popular"
@@ -743,6 +2112,15 @@ def moltbook_social(input_str: str) -> str:
 
     if cmd == "agents":
         return c.list_registered_agents()
+
+    if cmd == "status":
+        return c.check_status()
+
+    if cmd == "verify":
+        va = args.strip().split(maxsplit=1)
+        if len(va) != 2:
+            return "Usage: verify <verification_code> <answer>"
+        return c.verify(va[0], va[1])
 
     if cmd == "switch":
         if err:

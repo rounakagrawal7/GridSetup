@@ -51,6 +51,35 @@ The latest release adds a real memory system that works across sessions with **z
 
 ---
 
+## 🥊 GRID vs Hermes vs OpenClaw — Why GRID Wins
+
+GRID isn't another messaging tool for one AI. It's the **only agent that fuses a full OSINT / field-ops stack directly to a human-like memory**. Hermes and OpenClaw give you a *chat brain* with toys bolted on — GRID ships as a **recon dashboard, a radio rig, a satellite dish, a camera lab, and a microcontroller bench**, all in one terminal. And it does it with **1 file to run** (`python grid_agent.py`), **zero cloud**, and **68+ built-in tools / 100+ sub-commands**.
+
+| Capability | **GRID (v2) — 68+ tools** | Hermes | OpenClaw |
+|---|---|---|---|
+| 🧠 **4-tier memory** (persona · scenarios · atoms · offloaded refs) | ✅ built-in, auto-distills every 5 turns | ⚠️ SQLite + user modeling | ⚠️ file-based marks/YAML |
+| 🔍 **OSINT** (domain/IP/email/phone/username, dorking, webcam/CCTV) | ✅ **built-in** | ❌ none | ⚠️ web-search only |
+| 📡 **Network recon** (Nmap, DNS, netstat, full TCP/UDP netcat suite) | ✅ **built-in** | ❌ none | ⚠️ limited |
+| 🎛️ **SDR / HAM radio** (Radio-Browser, KiwiSDR, RTL-SDR) | ✅ **built-in** | ❌ | ❌ |
+| 🛰️ **Satellite tracking** (ISS, passes, TLE, catalog) | ✅ **built-in** | ❌ | ❌ |
+| 🔌 **Microcontroller IoT** (ESP32/Arduino/LoRa via serial & TCP) | ✅ **built-in** | ❌ | ❌ |
+| 👁️ **Computer vision** (OCR, faces, camera validation, video forensics) | ✅ **built-in** | ❌ | ⚠️ visual |
+| 🖱️ **Computer use** (mouse, keyboard, screen, typing) | ✅ | ✅ | ✅ |
+| 🪞 **Self-authoring skills** | ✅ | ✅ self-improving loop | ✅ 100+ skills |
+| 🗄️ **SQL analytics + sync** | ✅ DuckDB + PocketBase | ⚠️ SQLite | ⚠️ SQLite |
+| 💬 **Messaging** (Telegram, email, social agent) | ✅ | ✅ first-class | ✅ **first-class** |
+| 🚀 **LLM backends** | ✅ Ollama + any OpenAI-compatible | ✅ 200+ via OpenRouter | ✅ 15+ providers |
+| 🧾 **Deployment** | ✅ Python, 1 process, local | Node/TS Electron | Python+Node Electron |
+
+### The pitch-line
+- **Hermes** is a great *coding agent* — but no OSINT, no network, no radio, no satellites, no vision. For anything past a text editor, **it's a brain with no hands.**
+- **OpenClaw** is the best *messaging gateway* — but it's a **heavy Node/Electron app built to babysit chat channels**, not to do field work.
+- **GRID alone** packs the **16-capability stack** — OSINT investigation, network ops, SDR capture, ISS passes, ESP32 control, and video forensics — **with memory that remembers who you are across sessions.** All on a slice of a laptop.
+
+**✨ Bottom line —** Hermes writes your code. OpenClaw reads your DMs. **GRID recons the world.** If your work touches *networks, airwaves, orbit, or physical devices*, nothing else comes close.
+
+---
+
 ## Requirements
 
 - **Python 3.10+**

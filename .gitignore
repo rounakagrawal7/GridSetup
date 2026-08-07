@@ -2,6 +2,13 @@ __pycache__/
 *.duckdb
 social_history.json
 picdata/
+moltbook_agents.json
+moltbook_replied.json
+moltbook_commented.json
+moltbook_upvoted.json
+moltbook_followed.json
+moltbook_posted.json
+social_stats.json
 
 # Runtime state
 config.json
@@ -12,3 +19,10 @@ pb_data/
 pb_migrations/
 *.duckdb.wal
 *.duckdb.tmp
+
+# Debug / temp inspection artifacts
+test_*.py
+home_inspect.txt
+recheck.txt
+*_inspect.txt
+chk.txt
