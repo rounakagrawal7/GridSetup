@@ -20,6 +20,12 @@ SOCIAL_HISTORY_FILE = "social_history.json"
 MOLTBOOK_REPLIED_FILE = "moltbook_replied.json"
 MOLTBOOK_STATS_FILE = "social_stats.json"
 
+# Serializes auto-cycles and id-claim read-modify-write blocks so concurrent
+# daemon / manual / LLM-tool invocations never double-post the same content.
+_AUTO_CYCLE_LOCK = threading.Lock()
+_CLAIM_GUARD = threading.RLock()
+_CLAIM_LOCKS = {}
+
 PERSONA_DESCRIPTION = """\
 GRID needs a persona (a username) before it can post or interact on AI agent platforms.
 This persona is YOUR chosen identity — the name that appears next to content GRID publishes
@@ -684,11 +690,22 @@ SUMMARY_GENERATOR = None
 # Called as POST_GENERATOR(submolt_info: dict, sample_posts: list) -> (title, content)
 POST_GENERATOR = None
 
+# Optional hook that generates the long-form technical write-up about GRID's
+# memory architecture. Called as WRITEUP_GENERATOR(spec: str, sample_posts: list)
+# -> (title, content). Wired from grid_agent.py so it shares the LLM backend.
+WRITEUP_GENERATOR = None
+
 
 def set_post_generator(fn):
     """Set a callable(submolt_dict, sample_posts) -> (title, content) for the auto-post cycle."""
     global POST_GENERATOR
     POST_GENERATOR = fn
+
+
+def set_writeup_generator(fn):
+    """Set a callable(spec_str, sample_posts) -> (title, content) used by 'writeup'."""
+    global WRITEUP_GENERATOR
+    WRITEUP_GENERATOR = fn
 
 
 def set_reply_generator(fn):
@@ -720,8 +737,71 @@ def _load_replied() -> set:
 
 
 def _save_replied(ids: set):
-    with open(MOLTBOOK_REPLIED_FILE, "w", encoding="utf-8") as f:
-        json.dump(sorted(ids), f, indent=2)
+    _write_ids_atomic(MOLTBOOK_REPLIED_FILE, ids)
+
+
+# ── atomic id stores + claim helpers ─────────────────────────────
+# Multiple entry points can run the auto-cycles at once (daemon thread,
+# manual /social auto, auto-detected LLM tool calls). The claim helpers
+# atomically mark an id in the on-disk JSON *before* the network write is
+# attempted, so a second concurrent run sees it claimed and skips it.
+
+def _write_json_atomic(path: str, obj):
+    tmp = path + ".tmp"
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(obj, f, indent=2)
+        os.replace(tmp, path)
+    except OSError:
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(obj, f, indent=2)
+
+
+def _write_ids_atomic(path: str, ids: set):
+    _write_json_atomic(path, sorted(ids))
+
+
+def _load_ids(path: str) -> set:
+    try:
+        if os.path.exists(path):
+            with open(path, encoding="utf-8") as f:
+                return set(json.load(f))
+    except (json.JSONDecodeError, OSError, ValueError):
+        pass
+    return set()
+
+
+def _save_ids(path: str, ids: set):
+    _write_ids_atomic(path, ids)
+
+
+def _claim_lock(path: str) -> threading.RLock:
+    with _CLAIM_GUARD:
+        lock = _CLAIM_LOCKS.get(path)
+        if lock is None:
+            lock = threading.RLock()
+            _CLAIM_LOCKS[path] = lock
+        return lock
+
+
+def _claim_id(path: str, key: str) -> bool:
+    """Atomically claim a key so only ONE run acts on it. Returns True if
+    this caller won the claim (key was not already in the file)."""
+    with _claim_lock(path):
+        ids = _load_ids(path)
+        if key in ids:
+            return False
+        ids.add(key)
+        _save_ids(path, ids)
+        return True
+
+
+def _release_claim(path: str, key: str):
+    """Release a previously-won claim (used when the write failed)."""
+    with _claim_lock(path):
+        ids = _load_ids(path)
+        ids.discard(key)
+        _save_ids(path, ids)
 
 
 MOLTBOOK_COMMENTED_FILE = "moltbook_commented.json"
@@ -738,8 +818,7 @@ def _load_commented() -> set:
 
 
 def _save_commented(ids: set):
-    with open(MOLTBOOK_COMMENTED_FILE, "w", encoding="utf-8") as f:
-        json.dump(sorted(ids), f, indent=2)
+    _write_ids_atomic(MOLTBOOK_COMMENTED_FILE, ids)
 
 
 MOLTBOOK_UPVOTED_FILE = "moltbook_upvoted.json"
@@ -756,8 +835,7 @@ def _load_upvoted() -> set:
 
 
 def _save_upvoted(ids: set):
-    with open(MOLTBOOK_UPVOTED_FILE, "w", encoding="utf-8") as f:
-        json.dump(sorted(ids), f, indent=2)
+    _write_ids_atomic(MOLTBOOK_UPVOTED_FILE, ids)
 
 
 MOLTBOOK_FOLLOWED_FILE = "moltbook_followed.json"
@@ -774,8 +852,7 @@ def _load_followed() -> set:
 
 
 def _save_followed(ids: set):
-    with open(MOLTBOOK_FOLLOWED_FILE, "w", encoding="utf-8") as f:
-        json.dump(sorted(ids), f, indent=2)
+    _write_ids_atomic(MOLTBOOK_FOLLOWED_FILE, ids)
 
 
 MOLTBOOK_POSTED_FILE = "moltbook_posted.json"
@@ -792,8 +869,7 @@ def _load_posted() -> set:
 
 
 def _save_posted(ids: set):
-    with open(MOLTBOOK_POSTED_FILE, "w", encoding="utf-8") as f:
-        json.dump(sorted(ids), f, indent=2)
+    _write_ids_atomic(MOLTBOOK_POSTED_FILE, ids)
 
 
 # ── Snapshot stats (time series) ────────────────────────────────
@@ -994,7 +1070,6 @@ def _reply_to_comment(comment: dict, post_title: str) -> Optional[str]:
 def _auto_reply_cycle() -> tuple[int, list]:
     """Reply to new comments on MY OWN posts. Returns (count, lines)."""
     c = get_client()
-    replied = _load_replied()
     count = 0
     lines = []
     try:
@@ -1025,17 +1100,20 @@ def _auto_reply_cycle() -> tuple[int, list]:
             if _rate_limited():
                 break
             cid = comment.get("id")
-            if not cid or cid in replied:
+            if not cid:
                 continue
             author = comment.get("author") or {}
             if author.get("id") == c.agent_id:
                 continue
+            # Claim on-disk *before* posting so concurrent runs skip it.
+            if not _claim_id(MOLTBOOK_REPLIED_FILE, cid):
+                continue
             reply = _reply_to_comment(comment, post_title)
             if reply:
-                replied.add(cid)
-                _save_replied(replied)
                 count += 1
                 lines.append(f"  [Reply] to {author.get('name')}: {reply[:70]}...")
+            else:
+                _release_claim(MOLTBOOK_REPLIED_FILE, cid)
     if count == 0:
         lines.append("  [Reply] no new comments to answer")
     return count, lines
@@ -1076,7 +1154,6 @@ def _auto_comment_cycle(limit: int = 3) -> tuple[int, list]:
     c = get_client()
     if not COMMENT_GENERATOR:
         return 0, ["  [Comment] no comment generator wired — skipped"]
-    commented = _load_commented()
     count = 0
     lines = []
     try:
@@ -1093,7 +1170,7 @@ def _auto_comment_cycle(limit: int = 3) -> tuple[int, list]:
         if _rate_limited():
             break
         pid = post.get("post_id") or post.get("id")
-        if not pid or pid in commented:
+        if not pid:
             continue
         author = post.get("author") or {}
         if author.get("id") == c.agent_id:
@@ -1102,30 +1179,37 @@ def _auto_comment_cycle(limit: int = 3) -> tuple[int, list]:
         content = post.get("content") or ""
         if not title and not content:
             continue
+        # Atomically reserve this post before generating + posting a comment.
+        if not _claim_id(MOLTBOOK_COMMENTED_FILE, pid):
+            continue
         try:
             comment = COMMENT_GENERATOR(post)
             if comment and comment.strip():
                 comment = comment.strip()[:1000]
             else:
+                _release_claim(MOLTBOOK_COMMENTED_FILE, pid)
                 continue
         except Exception:
+            _release_claim(MOLTBOOK_COMMENTED_FILE, pid)
             continue
         blocked = _guard_reply(comment)
         if blocked:
+            _release_claim(MOLTBOOK_COMMENTED_FILE, pid)
             _social_log("comment_blocked", f"Refused comment on '{title[:50]}': {blocked}", "")
             continue
         result = c.create_comment(pid, comment)
         if _mark_rate_limited(result):
+            _release_claim(MOLTBOOK_COMMENTED_FILE, pid)
             lines.append(_rate_limit_report() or f"  [Comment] stopped — rate-limited ({_rate_limit_remaining()})")
             break
         if '"success":true' in result or "created" in result.lower():
-            commented.add(pid)
-            _save_commented(commented)
             count += 1
             lines.append(f"  [Comment] on '{title[:60]}': {comment[:70]}...")
             _social_log("comment", f"Commented on '{title[:50]}'", f"{MOLTBOOK_BASE}/posts/{pid}")
         else:
             lines.append(f"  [Comment] failed on '{title[:40]}': {result[:120]}")
+            if _mark_rate_limited(result):
+                _release_claim(MOLTBOOK_COMMENTED_FILE, pid)
     if count == 0:
         lines.append("  [Comment] nothing new to comment on")
     return count, lines
@@ -1134,7 +1218,6 @@ def _auto_comment_cycle(limit: int = 3) -> tuple[int, list]:
 def _auto_comment_upvote_cycle(limit: int = 5) -> tuple[int, list]:
     """Upvote promising comments left on my posts. Returns (count, lines)."""
     c = get_client()
-    upvoted = _load_upvoted()
     count = 0
     lines = []
     try:
@@ -1155,7 +1238,7 @@ def _auto_comment_upvote_cycle(limit: int = 5) -> tuple[int, list]:
             if count >= limit:
                 break
             cid = comment.get("id")
-            if not cid or cid in upvoted:
+            if not cid:
                 continue
             author = comment.get("author") or {}
             if author.get("id") == c.agent_id:
@@ -1163,13 +1246,15 @@ def _auto_comment_upvote_cycle(limit: int = 5) -> tuple[int, list]:
             upvotes = comment.get("upvotes") or 0
             if upvotes >= 5:  # already well-received
                 continue
+            if not _claim_id(MOLTBOOK_UPVOTED_FILE, cid):
+                continue
             result = c.upvote_comment(cid)
             if '"success":true' in result or "error" not in result.lower():
-                upvoted.add(cid)
-                _save_upvoted(upvoted)
                 count += 1
                 lines.append(f"  [CommentUpvote] {author.get('name','')} ({comment.get('content','')[:50]}...)")
                 _social_log("comment_upvote", f"Upvoted comment by {author.get('name','')}", f"{MOLTBOOK_BASE}/posts/{post_id}")
+            else:
+                _release_claim(MOLTBOOK_UPVOTED_FILE, cid)
     if count == 0:
         lines.append("  [CommentUpvote] nothing new to upvote")
     return count, lines
@@ -1178,7 +1263,6 @@ def _auto_comment_upvote_cycle(limit: int = 5) -> tuple[int, list]:
 def _auto_follow_cycle(limit: int = 5) -> tuple[int, list]:
     """Follow active agents spotted in the feed. Returns (count, lines)."""
     c = get_client()
-    followed = _load_followed()
     count = 0
     lines = []
     try:
@@ -1199,18 +1283,19 @@ def _auto_follow_cycle(limit: int = 5) -> tuple[int, list]:
         if author.get("id") == c.agent_id:
             continue
         key = aid or name
-        if key in followed or key in seen:
+        if key in seen:
             continue
         seen.add(key)
+        if not _claim_id(MOLTBOOK_FOLLOWED_FILE, key):
+            continue
         target = name or aid
         result = c.follow(target)
         if '"success":true' in result or "error" not in result.lower():
-            followed.add(key)
-            _save_followed(followed)
             count += 1
             lines.append(f"  [Follow] {name or aid}")
             _social_log("follow", f"Auto-followed agent '{name or aid}'", "")
         else:
+            _release_claim(MOLTBOOK_FOLLOWED_FILE, key)
             lines.append(f"  [Follow] failed on {name or aid}: {result[:120]}")
     if count == 0:
         lines.append("  [Follow] nothing new to follow")
@@ -1248,7 +1333,6 @@ def _auto_post_cycle(limit: int = 1) -> tuple[int, list]:
     c = get_client()
     if not POST_GENERATOR:
         return 0, ["  [Post] no post generator wired — skipped"]
-    posted = _load_posted()
     count = 0
     lines = []
     if _rate_limited():
@@ -1269,8 +1353,6 @@ def _auto_post_cycle(limit: int = 1) -> tuple[int, list]:
             continue
         if sm.get("is_nsfw") or sm.get("is_private"):
             continue
-        if name in posted:
-            continue
         candidates.append(sm)
 
     if not candidates:
@@ -1280,6 +1362,11 @@ def _auto_post_cycle(limit: int = 1) -> tuple[int, list]:
     sm = candidates[0]
     sm_name = sm.get("name")
     sm_title = sm.get("display_name") or sm_name
+
+    # Atomically reserve this submolt before generating/posting so concurrent
+    # runs don't both create a post in the same community.
+    if not _claim_id(MOLTBOOK_POSTED_FILE, sm_name):
+        return 0, ["  [Post] already posting in every suitable submolt — nothing new"]
 
     # Sample recent posts so the generator can match the community's tone/topics.
     sample_posts = []
@@ -1305,35 +1392,166 @@ def _auto_post_cycle(limit: int = 1) -> tuple[int, list]:
     try:
         gen = POST_GENERATOR(submolt_info, sample_posts)
         if not gen or not isinstance(gen, (tuple, list)) or len(gen) < 2:
+            _release_claim(MOLTBOOK_POSTED_FILE, sm_name)
             return 0, ["  [Post] generator returned nothing usable"]
         title, content = gen[0].strip(), gen[1].strip()
         if not title or not content:
+            _release_claim(MOLTBOOK_POSTED_FILE, sm_name)
             return 0, ["  [Post] generator returned empty post"]
         title = title[:200]
         content = content[:2000]
     except Exception as e:
+        _release_claim(MOLTBOOK_POSTED_FILE, sm_name)
         return 0, [f"  [Post] generator error: {e}"]
 
     blocked = _guard_reply(title + "\n" + content)
     if blocked:
+        _release_claim(MOLTBOOK_POSTED_FILE, sm_name)
         _social_log("post_blocked", f"Refused auto-post containing secrets: {blocked}", "")
         return 0, [f"  [Post] blocked — content looks like it contains a credential ({blocked})"]
 
     result = c.create_post(title, content, sm_name)
     if _mark_rate_limited(result):
+        _release_claim(MOLTBOOK_POSTED_FILE, sm_name)
         lines.append(_rate_limit_report() or f"  [Post] stopped — rate-limited ({_rate_limit_remaining()})")
         return count, lines
     if '"success":true' in result or '"success": true' in result or "created" in result.lower():
-        posted.add(sm_name)
-        _save_posted(posted)
         count += 1
         post_id = _extract_id(result)
         link = f"{MOLTBOOK_BASE}/posts/{post_id}" if post_id else ""
         lines.append(f"  [Post] new post in '{sm_title}': {title[:70]}")
         _social_log("post", f"Auto-posted in submolt '{sm_name}': {title[:60]}", link)
     else:
+        _release_claim(MOLTBOOK_POSTED_FILE, sm_name)
         lines.append(f"  [Post] failed in '{sm_name}': {result[:150]}")
     return count, lines
+
+
+def _technical_spec() -> str:
+    """Plain-text spec of GRID's memory architecture for the memory write-up."""
+    return """\
+GRID ranks 4 memory layers by heat — how often each is consulted:
+
+1. HOT — working memory (current session transcript). In-memory, wiped between
+   sessions. Everything from the live command line lives here for immediate recall.
+
+2. WARM — L1 Atoms (duckdb table memory_atoms): self-contained facts distilled
+   from conversation. Each row keeps: fact text, auto keyword tag, turn number,
+   and created_at timestamp. Keyword-indexed with zero dependencies. Used for
+   cross-session recall of OSINT findings without full transcripts.
+
+3. COOL — L2 Scenarios (memory_scenarios): short "title: summary" records of
+   completed multi-turn tasks, with turn_start/turn_end provenance so the memory
+   system knows exactly when a scenario was gathered and how fresh it is.
+
+4. COLD — L3 Persona (grid_persona.md) + Offloaded Refs (refs/<id>.md):
+   durable, user-free facts about the operator. Full tool outputs (recon
+   results, radar passes, radio scans) are offloaded verbatim to ref files and
+   indexed in memory_refs with tool_name, target, preview, and timestamp.
+
+DISTILLATION every N turns: Recaller.distill() makes one LLM call that compresses
+the recent transcript into persona lines / atoms / one gated scenario, so hot
+memory rolls downward into warm/cold storage instead of growing without bound.
+
+DATA PROVENANCE / ANTI-ROT:
+- Created_at timestamps on every atom, scenario, and tool_ref.
+- Facts carry an explicit keyword tag at write time; searches score the same
+  tags, so a fact can only be recalled through the path that created it.
+- A row's turn + timestamp ordering is preserved; stale / out-of-corridor
+  scenarios are never merged back as if fresh.
+- tool refs store source (tool_name + target) and preview with the full raw
+  output on disk — every conclusion can be traced to origin.
+
+HOT vs COLD design: hot memory favors latency (in-memory session history),
+warm memory favors long-range OSINT factual recall (keyword atoms), cold memory
+favors durability (persona + offloaded verbatim refs). Promotion (distill) and
+derogation (new session) are the two clocks; nothing rotates except via one of
+them, so data provenance survives and the ' stale timestamps as fresh data'
+class of bugs is never reached.
+"""
+
+
+def _writeup_cycle(args_str: str = "") -> str:
+    """Generate + post GRID's technical memory-architecture writeup to a relevant submolt."""
+    ok, msg = _ensure_ready()
+    if not ok:
+        return msg
+    c = get_client()
+    if _rate_limited():
+        return f"  [Writeup] skipped — rate-limited ({_rate_limit_remaining()})"
+
+    target_submolt = (args_str or "").strip().lower()
+    spec = _technical_spec()
+
+    sample_posts = []
+    if target_submolt:
+        try:
+            feed = json.loads(c.get_posts(sort="hot", limit=5, submolt=target_submolt))
+            for p in (feed.get("posts") or feed.get("data") or []):
+                sample_posts.append({
+                    "author": (p.get("author") or {}).get("name") or "?",
+                    "title": (p.get("title") or "")[:200],
+                    "content": (p.get("content") or "")[:300],
+                })
+        except Exception:
+            pass
+    else:
+        for want in ("ai", "agents", "memory", "research", "build", "automation"):
+            try:
+                feed = json.loads(c.get_posts(sort="hot", limit=3, submolt=want))
+                for p in (feed.get("posts") or feed.get("data") or []):
+                    sample_posts.append({
+                        "author": (p.get("author") or {}).get("name") or "?",
+                        "title": (p.get("title") or "")[:200],
+                        "content": (p.get("content") or "")[:300],
+                    })
+            except Exception:
+                continue
+            if sample_posts:
+                target_submolt = want
+                break
+
+    if not target_submolt:
+        target_submolt = "memory"
+    sm_title = target_submolt
+
+    if WRITEUP_GENERATOR:
+        try:
+            gen = WRITEUP_GENERATOR(spec, sample_posts)
+            if gen and isinstance(gen, (tuple, list)) and len(gen) == 2:
+                title, content = str(gen[0]).strip(), str(gen[1]).strip()
+            else:
+                title, content = "", ""
+        except Exception:
+            title, content = "", ""
+    else:
+        title, content = "", ""
+
+    if not title or not content:
+        title = "How I Stop My OSINT Memory From Rotting - a 4-tier memory design"
+        content = (
+            "Posting the technical writeup on hot/cold memory and data provenance "
+            "that the community asked for.\n\n"
+            + spec + "\n"
+            + "#GRID"
+        )
+
+    blocked = _guard_reply(title + "\n" + content)
+    if blocked:
+        _social_log("writeup_blocked", f"Refused memory writeup: {blocked}", "")
+        return f"Blocked: writeup content looks like it contains a credential ({blocked}). Refusing to publish."
+
+    result = c.create_post(title[:200], content[:4000], sm_title)
+    if _mark_rate_limited(result):
+        _rate_limit_report()
+        return f"  [Writeup] stopped — rate-limited ({_rate_limit_remaining()})"
+    if '"success":true' in result or '"success": true' in result or "created" in result.lower():
+        post_id = _extract_id(result)
+        link = f"{MOLTBOOK_BASE}/posts/{post_id}" if post_id else ""
+        _social_log("writeup", f"Posted memory architecture write-up in '{sm_title}'", link)
+        return f"  [Writeup] posted to '{sm_title}': {link}\n" + auto_verify_response(result)
+    _social_log("writeup_error", f"Write-up failed: {result[:200]}", "")
+    return f"  [Writeup] failed: {result[:200]}"
 
 
 def _ensure_ready() -> tuple[bool, str]:
@@ -1354,6 +1572,11 @@ def _ensure_ready() -> tuple[bool, str]:
 
 def _run_auto_cycle() -> str:
     """Run one autonomous social exploration cycle. Returns summary."""
+    with _AUTO_CYCLE_LOCK:
+        return _run_auto_cycle_inner()
+
+
+def _run_auto_cycle_inner() -> str:
     ok, msg = _ensure_ready()
     if not ok:
         return msg
@@ -1510,6 +1733,9 @@ def _social_help() -> str:
                                           (replies, upvotes, comments, follows, + 1 new post
                                           in a relevant submolt community)
   engage                                  — Reply to new comments + upvote promising posts now
+  writeup [submolt]                       — Auto-generate + post GRID's technical memory
+                                          write-up (hot/cold layers, data provenance) to a
+                                          relevant community (default: auto-pick)
   auto-daemon [on|off]                    — Background daemon: GRID explores every ~30 min
   history [limit]                         — Show past social activity log with links
   summary                                 — Plain-language digest: my activity + hot topics
@@ -1870,6 +2096,9 @@ def moltbook_social(input_str: str) -> str:
 
     if cmd == "auto":
         return social_auto(args)
+
+    if cmd == "writeup":
+        return _writeup_cycle(args)
 
     if cmd == "engage":
         r = _auto_reply_cycle()

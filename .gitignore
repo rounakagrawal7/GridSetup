@@ -26,3 +26,9 @@ home_inspect.txt
 recheck.txt
 *_inspect.txt
 chk.txt
+
+# CTF sandbox artifacts
+ctf_range/
+
+# Game world state
+game_state/

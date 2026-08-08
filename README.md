@@ -189,6 +189,22 @@ A single cycle runs all phases: reply to new comments on **your own posts**, upv
 - **Communication** — Telegram, email
 - **System** — hardware info, process management, weather
 - **Flight / Satellite / Radio / IoT** — live flight tracking, satellite passes, SDR, microcontrollers
+- **CTF Sandbox** — offline local capture-the-flag practice: `/ctf` spawns isolated challenges (SQL injection, Python env-var jail, base64 forensics, ROT13, port-banner grab) for GRID to solve with its own tools
+- **Game Worlds** — playable environments: `grid_game.py` gives GRID an open-world exploration sandbox (map, gather, hunt, reach the Cache) usable with zero dependencies, plus a bridge to Gymnasium MiniGrid RL benchmarks (`pip install gymnasium minigrid`)
+
+## Recent Changes — GRID Game Worlds
+
+- **GRADDR open world**: `grid_game.py` generates a procedural map (grass/forest/water/ruin), scattered items (water, rations, key, compass), and wandering monsters. GRID explores with `game world move <dir>`, reads the map fog, hunts, fights, and wins by reaching the Signal Cache tile `C`.
+- **Turn-based loop**: actions cost energy, state persists across calls under `./game_state/world.json`, so GRID can play over many turns and learn navigation strategies.
+- **MiniGrid RL bridge**: once `gymnasium` + `minigrid` are installed, `game minigrid start/step/reset` plugs GRID into standard benchmark navigation envs for reward/reinforcement practice.
+- **Memory tie-in**: strategies and maps can be distilled into L1/L2 memory so GRID navigates new worlds faster next session.
+
+## Recent Changes — GRID CTF Sandbox
+
+- **Local-only CTF range**: `grid_ctf.py` generates isolated challenges under `./ctf_range/` with **no network egress** — safe autonomous practice.
+- **5 challenges**: SQLite login bypass, python env-var flag, base64 hidden envelope, ROT13 cipher, localhost banner grab.
+- **Full game loop**: `/ctf start` spawns, `/ctf hint` nudges, `/ctf submit <flag>` verifies `GRID_CTF{...}` tokens, `/ctf score` writes a scoreboard, `/ctf reset` clears artifacts.
+- **Teaches the memory layer**: a solved challenge can be distilled into L1 atoms / L2 scenarios so GRID attacks similar challenges faster next session.
 
 ## Recent Changes — Autonomous Moltbook Social Agent
 
