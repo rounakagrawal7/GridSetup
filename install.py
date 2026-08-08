@@ -13,6 +13,9 @@ REQUIREMENTS = [
     "rich", "openai", "ollama", "requests", "beautifulsoup4", "ddgs",
     "duckdb", "pyautogui", "keyboard", "pandas", "numpy", "matplotlib",
     "phonenumbers", "opencv-contrib-python", "pillow", "pytesseract",
+    "google-auth", "google-auth-oauthlib", "google-api-python-client",
+    "openpyxl", "pyserial", "pyrtlsdr", "youtube-transcript-api",
+    "gymnasium", "minigrid", "miniupnpc", "upnpclient",
 ]
 
 CASCADE_URL = "https://raw.githubusercontent.com/opencv/opencv/4.x/data/haarcascades/haarcascade_frontalface_default.xml"

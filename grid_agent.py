@@ -178,6 +178,17 @@ def ensure_deps():
         ("cv2", "opencv-contrib-python", "Computer vision (face detect, camera check, video)"),
         ("PIL", "pillow", "Image processing for vision & screenshots"),
         ("pytesseract", "pytesseract", "OCR text extraction from images"),
+        ("google.auth", "google-auth", "Google OAuth2 credentials for Calendar/Sheets"),
+        ("google_auth_oauthlib", "google-auth-oauthlib", "Google OAuth flows"),
+        ("googleapiclient", "google-api-python-client", "Google Calendar & Sheets APIs"),
+        ("openpyxl", "openpyxl", "Excel (.xlsx) read/edit"),
+        ("serial", "pyserial", "Microcontroller serial (ESP32/Arduino) connections"),
+        ("rtlsdr", "pyrtlsdr", "RTL-SDR dongle tuning & scanning"),
+        ("youtube_transcript_api", "youtube-transcript-api", "YouTube transcript fetching"),
+        ("gymnasium", "gymnasium", "RL environments for the game module"),
+        ("minigrid", "minigrid", "MiniGrid benchmark navigation environments"),
+        ("miniupnpc", "miniupnpc", "UPnP port forwarding"),
+        ("upnpclient", "upnpclient", "UPnP client for port forwarding"),
     ]
 
     missing = []
