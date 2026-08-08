@@ -4665,7 +4665,7 @@ def main():
 
     # Hook Tina's LLM backend as the social reply-generator for auto-cycles
     try:
-        from grid_agent_social import set_reply_generator, set_comment_generator, set_summary_generator, set_post_generator, set_writeup_generator
+        from grid_agent_social import set_reply_generator, set_comment_generator, set_summary_generator, set_post_generator, set_writeup_generator, set_challenge_solver
 
         def _gen_reply(comment, post_title):
             author = (comment.get("author") or {}).get("name") or "friend"
@@ -4859,9 +4859,37 @@ def main():
             body = parts[1].strip() if len(parts) > 1 else ""
             return (title, body)
 
+        def _gen_challenge(challenge_text):
+            msgs = [
+                {"role": "system", "content": (
+                    "You are solving a CAPTCHA-style word problem from the Moltbook "
+                    "social network. The problem text is obfuscated: letters are "
+                    "replaced with similar-looking or random characters, case and "
+                    "spacing are scrambled, and noise words are inserted. Read it "
+                    "carefully to recover the real numbers and the operation (add, "
+                    "subtract, multiply, divide). Answer ONLY with the numeric result "
+                    "rounded to 2 decimal places, e.g. '14.30' or '5.00'. No extra text."
+                )},
+                {"role": "user", "content": (
+                    f"Obfuscated challenge text:\n\"{challenge_text}\"\n\n"
+                    "What is the numeric answer (2 decimal places)? Reply with just the number."
+                )},
+            ]
+            try:
+                out = backend.chat(msgs, temperature=0.0).strip()
+            except Exception:
+                return ""
+            out = re.sub(r"[^0-9.\-]", "", out)
+            try:
+                val = float(out)
+                return f"{val:.2f}"
+            except (ValueError, TypeError):
+                return ""
+
         set_summary_generator(_gen_summary)
         set_post_generator(_gen_post)
         set_writeup_generator(_gen_writeup)
+        set_challenge_solver(_gen_challenge)
     except Exception:
         pass
     if HAS_DUCKDB:

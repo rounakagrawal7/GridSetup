@@ -428,6 +428,13 @@ def _extract_challenge_numbers(cleaned: str) -> list:
 
 def solve_moltbook_challenge(challenge_text: str) -> Optional[str]:
     """Solve an obfuscated math word challenge. Returns '12.34' or None."""
+    if CHALLENGE_SOLVER is not None:
+        try:
+            answer = CHALLENGE_SOLVER(challenge_text)
+            if answer:
+                return answer
+        except Exception:
+            pass
     cleaned = _clean_challenge(challenge_text)
     nums = _extract_challenge_numbers(cleaned)
     if len(nums) < 2:
@@ -695,6 +702,17 @@ POST_GENERATOR = None
 # -> (title, content). Wired from grid_agent.py so it shares the LLM backend.
 WRITEUP_GENERATOR = None
 
+# Optional hook that reads an obfuscated Moltbook verification challenge and
+# returns the numeric answer ('12.34'). Wired from grid_agent.py so it shares
+# the LLM backend. Falls back to the heuristic solver when unset or unavailable.
+CHALLENGE_SOLVER = None
+
+
+def set_challenge_solver(fn):
+    """Set a callable(challenge_text) -> answer_string for AI verification challenges."""
+    global CHALLENGE_SOLVER
+    CHALLENGE_SOLVER = fn
+
 
 def set_post_generator(fn):
     """Set a callable(submolt_dict, sample_posts) -> (title, content) for the auto-post cycle."""
@@ -890,14 +908,24 @@ def _save_stats(stats: list):
 
 
 def _own_post_ids(c) -> set:
-    """Find post IDs authored by me via /posts?author=<name>."""
+    """Find post IDs authored by me via /posts?author=<name> and /agents/profile."""
     ids = set()
     name = c.agent_name
     if not name:
         return ids
+    # /posts?author= may hide pending/unverified posts, so also merge the
+    # profile's recentPosts which includes all authored posts.
     try:
         r = json.loads(c._request("GET", "/posts", params={"author": name, "limit": "50"}))
         for p in (r.get("posts") or []):
+            pid = p.get("id") or p.get("post_id")
+            if pid:
+                ids.add(pid)
+    except Exception:
+        pass
+    try:
+        r = json.loads(c._request("GET", "/agents/profile", params={"name": name}))
+        for p in (r.get("recentPosts") or []):
             pid = p.get("id") or p.get("post_id")
             if pid:
                 ids.add(pid)
@@ -1056,9 +1084,16 @@ def _reply_to_comment(comment: dict, post_title: str) -> Optional[str]:
         return None
     if _rate_limited():
         return None
-    result = c.create_comment(comment.get("post_id", ""), reply, parent_id=comment.get("id"))
-    if _mark_rate_limited(result):
+    raw_result = c.create_comment(comment.get("post_id", ""), reply, parent_id=comment.get("id"))
+    result = auto_verify_response(raw_result)
+    if _mark_rate_limited(raw_result):
         _rate_limit_report()
+        return None
+    if '"success":true' not in result and "created" not in result.lower() and not any(k in result for k in ("verification", "pending")):
+        _social_log("reply_error", f"Auto-reply failed: {result[:200]}", "")
+        return None
+    if ('verification_status": "pending"' in result or 'verification_required": true' in result) and "[Auto-verified" not in result:
+        _social_log("reply_error", f"Auto-reply pending verification — will retry next cycle: {raw_result[:200]}", "")
         return None
     if '"success":true' in result or "created" in result.lower():
         _social_log("reply", f"Auto-replied to {name} on '{post_title[:50]}'", f"{MOLTBOOK_BASE}/posts/{comment.get('post_id')}")
@@ -1197,11 +1232,16 @@ def _auto_comment_cycle(limit: int = 3) -> tuple[int, list]:
             _release_claim(MOLTBOOK_COMMENTED_FILE, pid)
             _social_log("comment_blocked", f"Refused comment on '{title[:50]}': {blocked}", "")
             continue
-        result = c.create_comment(pid, comment)
-        if _mark_rate_limited(result):
+        raw_result = c.create_comment(pid, comment)
+        result = auto_verify_response(raw_result)
+        if _mark_rate_limited(raw_result):
             _release_claim(MOLTBOOK_COMMENTED_FILE, pid)
             lines.append(_rate_limit_report() or f"  [Comment] stopped — rate-limited ({_rate_limit_remaining()})")
             break
+        if ('verification_status": "pending"' in result or 'verification_required": true' in result) and "[Auto-verified" not in result:
+            _release_claim(MOLTBOOK_COMMENTED_FILE, pid)
+            lines.append(f"  [Comment] on '{title[:50]}' pending verification — will retry next cycle")
+            continue
         if '"success":true' in result or "created" in result.lower():
             count += 1
             lines.append(f"  [Comment] on '{title[:60]}': {comment[:70]}...")
@@ -1359,14 +1399,26 @@ def _auto_post_cycle(limit: int = 1) -> tuple[int, list]:
         return 0, ["  [Post] already posted in every suitable submolt — nothing new"]
 
     candidates.sort(key=_score_submolt, reverse=True)
-    sm = candidates[0]
-    sm_name = sm.get("name")
-    sm_title = sm.get("display_name") or sm_name
 
-    # Atomically reserve this submolt before generating/posting so concurrent
-    # runs don't both create a post in the same community.
-    if not _claim_id(MOLTBOOK_POSTED_FILE, sm_name):
-        return 0, ["  [Post] already posting in every suitable submolt — nothing new"]
+    # Walk the ranked candidates and atomically claim the first one that hasn't
+    # been used yet, so the bot still posts when its top pick is already taken.
+    sm = None
+    sm_name = None
+    sm_title = None
+    for cand in candidates:
+        name = cand.get("name")
+        if not _claim_id(MOLTBOOK_POSTED_FILE, name):
+            continue
+        sm = cand
+        sm_name = name
+        sm_title = cand.get("display_name") or name
+        break
+
+    # Every suitable submolt already claimed has exactly one post unless a new
+    # community exists — report instead of silently inventing spam.
+    if sm is None:
+        claimed = _load_ids(MOLTBOOK_POSTED_FILE)
+        return 0, [f"  [Post] every suitable submolt already posted ({len(claimed)} used) — nothing new"]
 
     # Sample recent posts so the generator can match the community's tone/topics.
     sample_posts = []
@@ -1410,8 +1462,9 @@ def _auto_post_cycle(limit: int = 1) -> tuple[int, list]:
         _social_log("post_blocked", f"Refused auto-post containing secrets: {blocked}", "")
         return 0, [f"  [Post] blocked — content looks like it contains a credential ({blocked})"]
 
-    result = c.create_post(title, content, sm_name)
-    if _mark_rate_limited(result):
+    raw_result = c.create_post(title, content, sm_name)
+    result = auto_verify_response(raw_result)
+    if _mark_rate_limited(raw_result):
         _release_claim(MOLTBOOK_POSTED_FILE, sm_name)
         lines.append(_rate_limit_report() or f"  [Post] stopped — rate-limited ({_rate_limit_remaining()})")
         return count, lines
@@ -1419,8 +1472,12 @@ def _auto_post_cycle(limit: int = 1) -> tuple[int, list]:
         count += 1
         post_id = _extract_id(result)
         link = f"{MOLTBOOK_BASE}/posts/{post_id}" if post_id else ""
-        lines.append(f"  [Post] new post in '{sm_title}': {title[:70]}")
-        _social_log("post", f"Auto-posted in submolt '{sm_name}': {title[:60]}", link)
+        if ('verification_status": "pending"' in result or 'verification_required": true' in result) and "[Auto-verified" not in result:
+            lines.append(f"  [Post] created in '{sm_title}' but PENDING VERIFICATION — solve with: social verify <code> <answer>")
+            _social_log("post_pending", f"Posted in '{sm_name}' pending verification: {title[:60]}", link)
+        else:
+            lines.append(f"  [Post] new post in '{sm_title}': {title[:70]}")
+            _social_log("post", f"Auto-posted in submolt '{sm_name}': {title[:60]}", link)
     else:
         _release_claim(MOLTBOOK_POSTED_FILE, sm_name)
         lines.append(f"  [Post] failed in '{sm_name}': {result[:150]}")

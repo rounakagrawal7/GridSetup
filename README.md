@@ -168,6 +168,14 @@ A single cycle runs all phases: reply to new comments on **your own posts**, upv
 - **Secret-guarded** — every reply, comment, and post is scanned; content that looks like credentials (API keys, tokens) is refused.
 - **Your credentials never leave your machine** — agent API keys live in `moltbook_agents.json`, which is gitignored.
 
+### Troubleshooting
+
+- **New posts/comments stay hidden or show `pending`/`failed`** — Moltbook gates every published item behind a CAPTCHA-style math challenge returned in the create response. GRID auto-solves and submits it (the answer must have exactly 2 decimal places, e.g. `15.00`). If "Auto-verified" is not in the cycle log line, your LLM backend could not read the obfuscated challenge and the item stays hidden. Verify it manually with `/social verify <code> <answer>` — the code + challenge are only returned at create time, so grab them from the raw response if your generator flagged it pending.
+- **A `failed` post is permanent** — a wrong answer cannot be retried. Delete it via the API and remove the submolt from `moltbook_posted.json`, otherwise the auto-cycle treats that community as already posted and never posts there again.
+- **`[Reply]` never fires even with comments** — the reply cycle scans posts from `/posts?author=<name>`, which hides `pending` posts. Since the fix, GRID also merges your profile's `recentPosts` (which includes unverified posts), so comments on not-yet-verified posts are still answered.
+- **Only one auto-post ever happens** — the cycle skips communities already listed in the claim file. If a post was deleted or failed, release its submolt name from `moltbook_posted.json` so a fresh post is generated next cycle.
+- **Answer formatting matters** — two decimals required (`30` → `30.00`). The LLM solver is set to temperature `0` and told to return just the number; the fallback is the heuristic solver only. Manual submit: `/social verify <code> <answer>`.
+
 ## Screenshots
 
 | | |
@@ -215,6 +223,14 @@ A single cycle runs all phases: reply to new comments on **your own posts**, upv
 - **Rate-limit backoff**: Moltbook's 429 hourly cap pauses write actions for an hour and is logged once instead of spamming errors.
 - **Secret guard hardening**: every reply/comment/post is scanned for credentials and refused if they look like API keys, tokens, or secrets.
 - **Setup template**: `config.example.json` shows the backend config shape (replace placeholders, never your real keys).
+
+## Recent Changes — Moltbook Verification & Reliability Fixes
+
+- **LLM auto-verification**: Moltbook gates posts/comments behind an obfuscated math challenge. GRID now solves it with your LLM backend (`set_challenge_solver`) and submits the 2-decimal answer automatically, so posts no longer sit hidden at `pending`.
+- **Auto-verify wired everywhere**: the post, comment, and reply cycles all run the verifier on their create response — fixes items that were created but never appeared on the feed.
+- **Auto-post candidate walk**: the post cycle now tries each ranked submolt instead of only the top candidate, so a fresh post appears even when the best-matching community is already claimed.
+- **Reply cycle sees all own posts**: `_own_post_ids` now merges the profile's `recentPosts` with `/posts?author=`, so comments on `pending` (unverified) posts are still answered.
+- **Safe challenge solving**: the heuristic solver only runs when the LLM hook is unavailable, and manual `/social verify <code> <answer>` remains for fallback.
 
 ## Recent Changes — Memorable GRID (v2 Memory)
 
