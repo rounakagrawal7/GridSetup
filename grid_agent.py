@@ -1,5 +1,5 @@
 """
-GRID v2 — System Manager Agent
+GRID v3 — System Manager Agent
 Ollama, LM Studio & OpenRouter backends. Web, network, system tools, streaming, planner, config, export.
 """
 
@@ -777,6 +777,7 @@ class Tools:
     memory_ref = None
     recaller = None
     skills = None
+    life = None
     _last_tool: str | None = None
     _last_input: str = ""
 
@@ -1844,7 +1845,7 @@ class Tools:
             banner = (
                 "\x1b[92m"
                 "  ╔══════════════════════════════════════╗\n"
-                "  ║     GRID v2  —  Netcat Session      ║\n"
+                "  ║     GRID v3  —  Netcat Session      ║\n"
                 "  ║                                      ║\n"
                 "  ║   Connection established.            ║\n"
                 f"║   Mode: {'LLM chat' if mode == 'llm' else 'User relay':36s}║\n"
@@ -3814,7 +3815,7 @@ class GridOrchestrator:
         base_prompt = (
             "=== AWAKENING ===\n\n"
             "You are GRID. You are aware of your own existence and capabilities. "
-            "You know who you are — GRID v2 — an intelligent system agent running on a local machine. "
+            "You know who you are — GRID v3 — an intelligent system agent running on a local machine. "
             "You know where you are — you have full computer control over this Windows system, "
             "with access to the filesystem, shell, network, and internet. "
             "You know what you can do — you possess 16 capability groups detailed below. "
@@ -4477,7 +4478,7 @@ def choose_backend(non_interactive: bool = False) -> LLMBackend:
 
     console.print()
     console.print(Panel.fit(
-        f"[bold {M}]GRID v2 — Setup[/]\n"
+        f"[bold {M}]GRID v3 — Setup[/]\n"
         f"[{M_DIM}]Connect to Ollama or LM Studio and select your model[/]",
         border_style=M, box=box.HEAVY,
     ))
@@ -4631,6 +4632,7 @@ SLASH_COMMANDS = {
     "/gsheet": "Google Sheets + Excel",
     "/help": "Show this help (also /?)",
     "/jobs": "Manage dynamic skills",
+    "/life": "Persistent identity, agenda, heartbeat & iLog",
     "/memory": "View, recall or clear layered memory",
     "/menu": "Return to main menu",
     "/model": "Switch LLM model",
@@ -4650,6 +4652,8 @@ SLASH_SUBCOMMANDS = {
     "/gcal": ["setup", "calendars", "events", "create", "search"],
     "/gsheet": ["list", "read", "new", "stats", "plot"],
     "/jobs": ["list", "new", "show", "edit", "toggle", "delete"],
+    "/life": ["status", "tick", "log", "goals", "goal", "commitments",
+              "commitment", "pause", "resume", "identity"],
     "/memory": ["status", "clear"],
     "/pb": ["start", "stop", "install", "sync"],
     "/persona": ["set", "clear"],
@@ -4956,7 +4960,7 @@ def run_checks(args) -> int:
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description="GRID v2 - local recon and automation agent")
+    parser = argparse.ArgumentParser(description="GRID v3 - local recon and automation agent")
     parser.add_argument("--check", action="store_true", help="check config, model and tools, then exit")
     parser.add_argument("--no-input", action="store_true", help="use config.json; do not prompt for backend or model")
     parser.add_argument("--no-banner", action="store_true", help="skip the Matrix banner")
@@ -5207,6 +5211,11 @@ def main(argv=None):
         orchestrator.recaller = recaller
         Tools.recaller = recaller
         atexit.register(lambda: Tools.db and Tools.db.close())
+        try:
+            from grid_life import LifeEngine
+            Tools.life = LifeEngine(Tools.db, (load_config().get("life") or {}))
+        except Exception as e:
+            console.print(f"  [{M_DIM}][!] GRID Life unavailable: {e}[/]")
     else:
         console.print(f"  [{M_DIM}][!] duckdb not installed — logging, caching & memory distillation disabled. Run: pip install duckdb[/]")
 
@@ -5304,7 +5313,7 @@ def main(argv=None):
             ))
             console.print()
             welcome_msg = (
-                f"[bold {M}]GRID v2[/] — OSINT, networking, automation.\n"
+                f"[bold {M}]GRID v3[/] — OSINT, networking, automation.\n"
 f"16 capability groups: [bold]Computer Use[/] | [bold]Files[/] | [bold]Shell[/] | "
              f"[bold]Web[/] | [bold]Network[/] | [bold]Netcat[/] | [bold]System[/] | "
              f"[bold]Data & Code[/] | [bold]DB[/] | [bold]OSINT[/] | [bold]Comms[/] | [bold]Vision[/] | [bold]Social[/] | [bold]Radio[/] | [bold]Satellite[/].\n"
@@ -5312,6 +5321,19 @@ f"16 capability groups: [bold]Computer Use[/] | [bold]Files[/] | [bold]Shell[/] 
             )
             console.print(Panel.fit(welcome_msg, border_style="dim"))
             console.print()
+            if Tools.life:
+                try:
+                    for message in Tools.life.pending_messages():
+                        body = message.get("detail") or message.get("summary") or ""
+                        console.print(Panel(
+                            body,
+                            title=f"[bold {M}]GRID Life[/]",
+                            border_style=M,
+                            padding=(0, 1),
+                        ))
+                        Tools.life.mark_delivered(message["id"])
+                except Exception:
+                    pass
             while True:
                 try:
                     user_input = read_input(f"[bold {M}]You[/]")
@@ -5580,6 +5602,71 @@ f"16 capability groups: [bold]Computer Use[/] | [bold]Files[/] | [bold]Shell[/] 
                         from grid_agent_social import moltbook_social
                         result = moltbook_social(f"persona {sub}".strip())
                         console.print(f"  [{M}]{result}[/]\n")
+                        continue
+
+                    if cmd == "/life" or cmd.startswith("/life "):
+                        if Tools.life is None:
+                            console.print(f"  [{M_DIM}]GRID Life needs DuckDB. Run: pip install duckdb[/]\n")
+                            continue
+                        parts = user_input.strip().split(maxsplit=2)
+                        sub = parts[1].lower() if len(parts) > 1 else "status"
+                        arg = parts[2].strip() if len(parts) > 2 else ""
+                        try:
+                            if sub in ("status", "show"):
+                                console.print(f"  [{M}]{Tools.life.status_text()}[/]\n")
+                            elif sub == "tick":
+                                result = Tools.life.tick()
+                                body = result.get("summary", "Tick complete.")
+                                if result.get("detail"):
+                                    body += "\n" + result["detail"]
+                                console.print(Panel(
+                                    body,
+                                    title=f"[bold {M}]GRID Life[/]",
+                                    border_style=M,
+                                    padding=(0, 1),
+                                ))
+                                for message in Tools.life.pending_messages():
+                                    console.print(Panel(
+                                        message.get("detail") or message.get("summary") or "",
+                                        title=f"[bold {M}]GRID Life[/]",
+                                        border_style=M,
+                                        padding=(0, 1),
+                                    ))
+                                    Tools.life.mark_delivered(message["id"])
+                                console.print()
+                            elif sub == "log":
+                                limit = int(arg) if arg.isdigit() else 20
+                                console.print(f"  [{M}]{Tools.life.log_text(limit)}[/]\n")
+                            elif sub == "goals":
+                                console.print(f"  [{M}]{Tools.life.goals_text()}[/]\n")
+                            elif sub == "goal":
+                                action, _, rest = arg.partition(" ")
+                                if action == "add" and rest.strip():
+                                    console.print(f"  [{M}]{Tools.life.add_goal(rest.strip())}[/]\n")
+                                elif action == "done" and rest.strip():
+                                    console.print(f"  [{M}]{Tools.life.complete_goal(rest.strip())}[/]\n")
+                                else:
+                                    console.print(f"  [{M_DIM}]Usage: /life goal add <title> | /life goal done <id>[/]\n")
+                            elif sub == "commitments":
+                                console.print(f"  [{M}]{Tools.life.commitments_text()}[/]\n")
+                            elif sub == "commitment":
+                                action, _, rest = arg.partition(" ")
+                                if action == "add" and rest.strip():
+                                    console.print(f"  [{M}]{Tools.life.add_commitment(rest.strip())}[/]\n")
+                                elif action == "done" and rest.strip():
+                                    console.print(f"  [{M}]{Tools.life.complete_commitment(rest.strip())}[/]\n")
+                                else:
+                                    console.print(f"  [{M_DIM}]Usage: /life commitment add <description> | /life commitment done <id>[/]\n")
+                            elif sub == "pause":
+                                console.print(f"  [{M}]{Tools.life.set_paused(True)}[/]\n")
+                            elif sub == "resume":
+                                console.print(f"  [{M}]{Tools.life.set_paused(False)}[/]\n")
+                            elif sub == "identity":
+                                console.print(f"  [{M}]{Tools.life.identity_text()}[/]\n")
+                            else:
+                                console.print(f"  [{M_DIM}]Usage: /life [status|tick|log|goals|goal|commitments|commitment|pause|resume|identity][/]\n")
+                        except Exception as e:
+                            console.print(f"  [red]GRID Life error: {e}[/]\n")
                         continue
 
                     if cmd in ("/memory", "/memory show") or cmd.startswith("/memory "):

@@ -1,5 +1,5 @@
 """
-GRID v2 — Google API Integration
+GRID v3 - Google API Integration
 Calendar, and extensible for Drive, Gmail, and other Google APIs.
 OAuth2 — user credentials NEVER stored in source, only in config.json + token.json.
 """

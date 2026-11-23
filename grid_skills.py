@@ -1,5 +1,5 @@
 """
-GRID v2 — Dynamic Skill Manager
+GRID v3 - Dynamic Skill Manager
 File-based skills with def run(input) interface, auto-registration as Tools,
 JSON schema support, skill chaining, and LLM-driven creation.
 """

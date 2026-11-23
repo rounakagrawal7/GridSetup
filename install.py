@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-GRID v2 — First-Time Setup Installer
+GRID v3 — First-Time Setup Installer
 Installs all dependencies, downloads required models, and creates default config.
 """
 
@@ -113,7 +113,7 @@ def check_tesseract():
 def main():
     print()
     print("+--------------------------------------------------+")
-    print("|           GRID v2 Dependency Installer            |")
+    print("|           GRID v3 Dependency Installer            |")
     print("+--------------------------------------------------+")
     print()
 

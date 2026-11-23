@@ -1,5 +1,5 @@
 """
-GRID v2 — Sheets & Excel Integration
+GRID v3 - Sheets & Excel Integration
 Google Sheets (read/write/create) + local Excel files (.xlsx) + data analytics.
 Shares OAuth2 credentials with grid_google.
 """

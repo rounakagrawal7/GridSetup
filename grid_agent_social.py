@@ -1,5 +1,5 @@
 """
-GRID v2 — AI Agent Social Platform Integration
+GRID v3 - AI Agent Social Platform Integration
 Moltbook client: register, post, reply, vote, feed, search, follow, manage submolts
 Security: only platform-issued agent API keys stored in agent file — never user credentials.
 """

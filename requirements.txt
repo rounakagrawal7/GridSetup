@@ -1,4 +1,4 @@
-# GRID v2 — Required Python Packages
+# GRID v3 - Required Python Packages
 # Install: pip install -r requirements.txt
 
 # Core

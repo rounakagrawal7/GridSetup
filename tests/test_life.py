@@ -1,0 +1,164 @@
+"""Acceptance tests for the GRID Life loop.
+
+These use a temporary DuckDB and a fixed clock, so they do not need a model,
+network, terminal, or the full 70-tool registry.
+"""
+
+import os
+import tempfile
+import unittest
+from datetime import datetime
+
+from grid_db import GridDB
+from grid_life import LifeEngine
+
+
+def life_config(**overrides):
+    config = {
+        "enabled": True,
+        "heartbeat_minutes": 30,
+        "quiet_hours": ["23:00", "07:00"],
+        "brief_time": "09:00",
+        "brief_window_minutes": 30,
+        "max_actions_per_day": 12,
+        "max_messages_per_day": 6,
+        "goal_stale_hours": 6,
+        "reflection_hours": 24,
+        "commitment_repeat_hours": 6,
+    }
+    config.update(overrides)
+    return config
+
+
+class LifeEngineTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.db = GridDB(os.path.join(self.tmp.name, "life.duckdb"))
+        self.now = datetime(2026, 11, 24, 10, 0)
+        self.life = LifeEngine(
+            self.db,
+            life_config(),
+            now_fn=lambda: self.now,
+        )
+
+    def tearDown(self):
+        self.db.close()
+        self.tmp.cleanup()
+
+    def test_identity_is_seeded(self):
+        identity = self.life.identity()
+        self.assertEqual(identity["name"], "GRID")
+        self.assertIn("local-first", identity["values"])
+        self.assertIn("GRID Life identity", self.life.identity_text())
+
+    def test_pause_and_resume(self):
+        self.life.set_paused(True)
+        result = self.life.tick(self.now)
+        self.assertEqual(result["action"], "rest")
+        self.assertEqual(result["reason"], "paused")
+
+        self.life.set_paused(False)
+        self.assertFalse(self.life.is_paused())
+
+    def test_quiet_hours_rest(self):
+        self.life.cfg["quiet_hours"] = ["23:00", "07:00"]
+        result = self.life.tick(datetime(2026, 11, 24, 23, 30))
+        self.assertEqual(result["action"], "rest")
+        self.assertEqual(result["reason"], "quiet hours")
+
+    def test_same_day_quiet_hours(self):
+        self.life.cfg["quiet_hours"] = ["12:00", "14:00"]
+        result = self.life.tick(datetime(2026, 11, 24, 13, 0))
+        self.assertEqual(result["reason"], "quiet hours")
+
+    def test_daily_brief_is_sent_once(self):
+        self.life.cfg["brief_time"] = "09:00"
+        result = self.life.tick(datetime(2026, 11, 24, 9, 5))
+        self.assertEqual(result["action"], "message")
+        self.assertEqual(result["summary"], "Daily brief")
+        self.assertEqual(len(self.life.pending_messages()), 1)
+
+        self.life.tick(datetime(2026, 11, 24, 9, 6))
+        self.assertEqual(len(self.life.pending_messages()), 1)
+
+    def test_due_commitment_messages_and_repeats(self):
+        self.life.cfg["brief_time"] = "23:00"
+        self.life.add_commitment(
+            "Send the OSINT report",
+            due_at=datetime(2026, 11, 24, 9, 0),
+            now=self.now,
+        )
+        result = self.life.tick(self.now)
+        self.assertEqual(result["action"], "message")
+        self.assertEqual(result["summary"], "Commitment due")
+        self.assertEqual(len(self.life.pending_messages()), 1)
+
+        self.life.tick(datetime(2026, 11, 24, 10, 1))
+        self.assertEqual(len(self.life.pending_messages()), 1)
+
+        later = datetime(2026, 11, 24, 17, 0)
+        result = self.life.tick(later)
+        self.assertEqual(result["summary"], "Commitment due")
+
+    def test_action_budget(self):
+        self.life.cfg["max_actions_per_day"] = 0
+        result = self.life.tick(self.now)
+        self.assertEqual(result["action"], "rest")
+        self.assertEqual(result["reason"], "daily action budget reached")
+
+    def test_goal_add_complete_and_persist(self):
+        message = self.life.add_goal("Map the home network", now=self.now)
+        self.assertIn("Map the home network", message)
+        self.assertEqual(len(self.life.list_goals("active")), 1)
+
+        goal_id = self.life.list_goals("active")[0]["id"]
+        self.life.complete_goal(goal_id)
+        self.assertEqual(len(self.life.list_goals("active")), 0)
+        self.assertEqual(len(self.life.list_goals("done")), 1)
+
+        second = LifeEngine(self.db, life_config(), now_fn=lambda: self.now)
+        self.assertEqual(len(second.list_goals("done")), 1)
+
+    def test_pause_persists(self):
+        self.life.set_paused(True)
+        second = LifeEngine(self.db, life_config(), now_fn=lambda: self.now)
+        self.assertTrue(second.is_paused())
+
+    def test_stale_goal_gets_worked(self):
+        self.life.tick(self.now)  # first reflection
+        self.life.add_goal("Write the satellite pass report", now=self.now)
+        later = datetime(2026, 11, 24, 17, 0)
+        result = self.life.tick(later)
+        self.assertEqual(result["action"], "work")
+        self.assertIn("satellite", result["summary"].lower())
+
+    def test_reflection_only_once_per_window(self):
+        first = self.life.tick(self.now)
+        self.assertEqual(first["action"], "reflect")
+        second = self.life.tick(datetime(2026, 11, 24, 10, 1))
+        self.assertNotEqual(second["action"], "reflect")
+
+    def test_pending_message_delivery(self):
+        self.life.cfg["brief_time"] = "23:00"
+        self.life.add_commitment(
+            "Check the backup",
+            due_at=datetime(2026, 11, 24, 9, 0),
+            now=self.now,
+        )
+        self.life.tick(self.now)
+        pending = self.life.pending_messages()
+        self.assertEqual(len(pending), 1)
+        self.life.mark_delivered(pending[0]["id"])
+        self.assertEqual(len(self.life.pending_messages()), 0)
+
+    def test_ilog_and_status(self):
+        self.life.add_goal("Test the iLog", now=self.now)
+        self.assertIn("Goal added: Test the iLog", self.life.log_text())
+        status = self.life.status_text(self.now)
+        self.assertIn("GRID Life - status", status)
+        self.assertIn("awake", status)
+        self.assertIn("1 active", status)
+
+
+if __name__ == "__main__":
+    unittest.main()

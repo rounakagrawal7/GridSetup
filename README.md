@@ -1,6 +1,6 @@
 <div align="center">
 
-# GRID v2
+# GRID v3
 
 ### General Reconnaissance & Intelligence Dashboard
 
@@ -59,7 +59,7 @@ The latest release adds a real memory system that works across sessions with **z
 
 GRID isn't another messaging tool for one AI. It's the **only agent that fuses a full OSINT / field-ops stack directly to a human-like memory**. Hermes and OpenClaw give you a *chat brain* with toys bolted on — GRID ships as a **recon dashboard, a radio rig, a satellite dish, a camera lab, and a microcontroller bench**, all in one terminal. And it does it with **1 file to run** (`python grid_agent.py`), **local-first operation**, and **70+ built-in tools / 100+ sub-commands**.
 
-| Capability | **GRID (v2) - 70+ tools** | Hermes | OpenClaw |
+| Capability | **GRID (v3) - 70+ tools** | Hermes | OpenClaw |
 |---|---|---|---|
 | 🧠 **4-tier memory** (persona · scenarios · atoms · offloaded refs) | ✅ built-in, auto-distills every 5 turns | ⚠️ SQLite + user modeling | ⚠️ file-based marks/YAML |
 | 🔍 **OSINT** (domain/IP/email/phone/username, dorking, webcam/CCTV) | ✅ **built-in** | ❌ none | ⚠️ web-search only |
@@ -145,6 +145,26 @@ If the model says it has no tools, make sure Ollama is running and the model sup
 
 Type `/` and press **Tab** to complete a slash command. Subcommands complete too (`/persona ` shows `set` and `clear`). **Up/Down** walks prompt history, and matching history appears as grey inline text.
 
+### GRID Life
+
+GRID v3 adds a persistent local life layer: identity, goals, commitments, a heartbeat, an iLog, and messages that wait for you. It stores everything in the same DuckDB as the rest of GRID and never performs external actions on its own.
+
+| Command | Action |
+|---|---|
+| `/life` | Status, budget, next wake, pending messages |
+| `/life tick` | Run one heartbeat now |
+| `/life log [n]` | Show the iLog |
+| `/life goals` | List active goals |
+| `/life goal add <title>` | Add a goal |
+| `/life goal done <id>` | Complete a goal |
+| `/life commitments` | List open commitments |
+| `/life commitment add <text>` | Add a commitment |
+| `/life commitment done <id>` | Complete a commitment |
+| `/life pause` / `/life resume` | Pause or resume the life loop |
+| `/life identity` | Show the persistent identity |
+
+Defaults live in `config.json` under `life`: 30-minute heartbeat, quiet hours 22:00–08:00, a 09:00 brief, and daily budgets of 12 actions and 6 messages. The standalone `python grid_life.py status|tick|log` works when GRID is closed.
+
 
 > 📘 After first launch, open **`GRID_Tools_Test_Guide.docx`** for the full command reference.
 
@@ -163,6 +183,7 @@ Type `/` and press **Tab** to complete a slash command. Subcommands complete too
 | `grid_radio.py` | Radio & SDR (Radio-Browser, KiwiSDR, RTL-SDR) |
 | `grid_micro.py` | Microcontroller IoT (ESP32, Arduino, LoRa) |
 | `grid_skills.py` | Self-authored reusable skills |
+| `grid_life.py` | Persistent identity, goals, commitments, heartbeat and iLog |
 | `grid_agent_social.py` | Moltbook social agent platform |
 | `grid_google.py` / `grid_sheets.py` | Google Calendar & Sheets / Excel |
 | `install.py` | One-time setup — deps, models, config |

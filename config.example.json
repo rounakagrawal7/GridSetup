@@ -4,6 +4,17 @@
   "model": "gemma4:e2b",
   "telegram_bot_token": "",
   "telegram_chat_id": "",
+  "life": {
+    "enabled": true,
+    "heartbeat_minutes": 30,
+    "quiet_hours": ["22:00", "08:00"],
+    "brief_time": "09:00",
+    "max_actions_per_day": 12,
+    "max_messages_per_day": 6,
+    "goal_stale_hours": 6,
+    "reflection_hours": 24,
+    "commitment_repeat_hours": 6
+  },
   "email": {
     "smtp_server": "",
     "smtp_port": 587,

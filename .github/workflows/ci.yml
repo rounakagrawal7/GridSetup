@@ -39,3 +39,6 @@ jobs:
 
       - name: Import and tool registry
         run: python -c "import grid_agent; print('tools', len(grid_agent.Tools.registry)); assert len(grid_agent.Tools.registry) >= 70"
+
+      - name: Unit tests
+        run: python -m unittest discover -s tests -v

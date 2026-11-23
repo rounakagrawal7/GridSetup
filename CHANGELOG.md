@@ -1,6 +1,20 @@
 # Changelog
 
-## v2.0.1 — clean run
+## v3.0 - GRID Life (in progress)
+
+- Added `grid_life.py`: persistent identity, goals, commitments, relationships,
+  heartbeat, budgets, quiet hours, reflections, pending messages and an iLog,
+  stored in the existing DuckDB.
+- Added `/life` commands for status, tick, iLog, goals, commitments, pause,
+  resume and identity. Pending messages are shown when you enter Chat.
+- Added a standalone `python grid_life.py status|tick|log` CLI for when GRID
+  is closed.
+- Added 13 fixed-clock unit tests for the life loop; CI runs them.
+- Renamed the app and setup banners to GRID v3.
+- The open-source stack (Agent Skills, MCP, MarkItDown, evals, optional tools)
+  is the next v3 slice.
+
+## v2.0.1 - clean run
 
 - Added `--check`: a non-interactive setup check for Python, required imports,
   `config.json`, Ollama, the selected model, DuckDB and the tool registry.

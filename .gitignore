@@ -21,8 +21,8 @@ pb_migrations/
 *.duckdb.wal
 *.duckdb.tmp
 
-# Debug / temp inspection artifacts
-test_*.py
+# Debug / temp inspection artifacts (repo-root only; tests/ is tracked)
+/test_*.py
 home_inspect.txt
 recheck.txt
 *_inspect.txt
