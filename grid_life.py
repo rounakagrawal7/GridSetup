@@ -24,6 +24,7 @@ LIFE_DEFAULTS: Dict[str, Any] = {
     "max_messages_per_day": 6,
     "autopilot_interval_seconds": 20,
     "autopilot_checkin_cycles": 3,
+    "autopilot_idle_seconds": 60,
     "include_local_context": True,
     "allow_cloud_context": False,
     "compress_context": False,
@@ -444,6 +445,24 @@ class LifeEngine:
         )
         self._event("goal_done", f"Goal completed: {row[1]}", "", row[0], now)
         return f"Goal completed: {row[1]} ({row[0]})"
+
+    def pause_goal(self, goal_id: str, reason: str = "") -> str:
+        row = self._find_goal(goal_id)
+        if not row:
+            return f"Error: goal '{goal_id}' not found."
+        now = self.now_fn()
+        self.conn.execute(
+            "UPDATE life_goals SET status = 'paused', updated_at = ? WHERE id = ?",
+            [now, row[0]],
+        )
+        self._event(
+            "goal_paused",
+            f"Goal paused: {row[1]}",
+            reason,
+            row[0],
+            now,
+        )
+        return f"Goal paused: {row[1]} ({row[0]})"
 
     def list_goals(self, status: Optional[str] = "active") -> List[Dict[str, Any]]:
         if status:

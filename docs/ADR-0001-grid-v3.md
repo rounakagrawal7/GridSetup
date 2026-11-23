@@ -42,7 +42,8 @@ The life loop must be able to do nothing. "Rest" is a first-class action.
   require confirmation unless the user explicitly auto-approves them.
 - `/life` starts autopilot and keeps working until Esc twice returns to
   manual. It may message first, report progress, ask `ASK_USER` follow-ups and
-  check in. An explicit `/life pause` still wins.
+  check in. Completed one-shot goals leave GRID awake and asking what is next.
+  An explicit `/life pause` still wins.
 - GRID Life uses the same persona as `/persona`. The persona is the social
   identity (for example Moltbook as TinaGrid), and the awake prompt includes
   that identity, its social presence and the full toolset. If no persona is

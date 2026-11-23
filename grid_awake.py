@@ -373,6 +373,9 @@ class AutopilotRunner(AwakeRunner):
         self.checkin_cycles = max(
             1, int(cfg.get("autopilot_checkin_cycles", 3))
         )
+        self.idle_interval = max(
+            15, int(cfg.get("autopilot_idle_seconds", 60))
+        )
         self.followups: list[str] = []
 
     def _ask_user(self, question: str, title: str = "GRID asks") -> str:
@@ -467,6 +470,16 @@ class AutopilotRunner(AwakeRunner):
             )
         return response
 
+    def _idle(self) -> str:
+        question = "I'm awake with no active goals. What should I work on next?"
+        event = self.life.record_event("message", "Autopilot idle", question)
+        self.life.mark_delivered(event["id"])
+        answer = self._ask_user(question, title="GRID is awake")
+        if answer:
+            return answer
+        self._wait(self.idle_interval)
+        return ""
+
     def run(self, focus: Optional[str] = None) -> str:
         from rich.markup import escape
         from rich.panel import Panel
@@ -507,7 +520,6 @@ class AutopilotRunner(AwakeRunner):
             )
 
         cycles = 0
-        self.completed = False
         try:
             while not self.token.is_set():
                 for message in self.life.pending_messages():
@@ -529,10 +541,11 @@ class AutopilotRunner(AwakeRunner):
 
                 goals = self.life.list_goals("active")
                 if not goals:
-                    self.console.print(
-                        f"  [{M_DIM}]No active goals. Press Esc twice to return to manual.[/]"
-                    )
-                    self._wait(30)
+                    task = self._idle()
+                    if self.token.is_set():
+                        break
+                    if task:
+                        self.life.add_goal(task, priority=1, goal_type="once")
                     continue
 
                 goal = goals[cycles % len(goals)]
@@ -549,34 +562,30 @@ class AutopilotRunner(AwakeRunner):
                 failed = response.startswith("[Autopilot error]") or response.startswith("[Blocked]")
                 if goal.get("goal_type", "once") == "once":
                     if failed:
+                        self.life.pause_goal(goal["id"], response[:500])
                         self.console.print(Panel(
-                            "Goal needs attention. Back to manual.",
+                            "Goal paused. I'm staying awake; tell me what to change.",
                             border_style=M,
                             padding=(0, 1),
                         ))
-                        break
+                        continue
                     self.life.complete_goal(goal["id"])
-                    remaining = self.life.list_goals("active")
-                    if not remaining:
-                        self.completed = True
-                        self.console.print(Panel(
-                            f"Goal complete: {goal['title']}",
-                            border_style=M,
-                            padding=(0, 1),
-                        ))
-                        break
-                    self.console.print(
-                        f"  [{M_DIM}]Goal complete; continuing with the next goal.[/]"
-                    )
-                    continue
-
-                if failed:
                     self.console.print(Panel(
-                        "Goal needs attention. Back to manual.",
+                        f"Goal complete: {goal['title']}\n"
+                        "I'm staying awake. What next?",
                         border_style=M,
                         padding=(0, 1),
                     ))
-                    break
+                    continue
+
+                if failed:
+                    self.life.pause_goal(goal["id"], response[:500])
+                    self.console.print(Panel(
+                        "Goal paused. I'm staying awake; tell me what to change.",
+                        border_style=M,
+                        padding=(0, 1),
+                    ))
+                    continue
 
                 if cycles % self.checkin_cycles == 0:
                     question = (
@@ -604,10 +613,8 @@ class AutopilotRunner(AwakeRunner):
             Tools.policy = None
 
         self.console.print(Panel(
-            "Autopilot complete. Back to manual."
-            if self.completed
-            else "Autopilot stopped. Back to manual.",
+            "Autopilot stopped. Back to manual.",
             border_style=M,
             padding=(0, 1),
         ))
-        return "Autopilot complete." if self.completed else "Autopilot stopped."
+        return "Autopilot stopped."

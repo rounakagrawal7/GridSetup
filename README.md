@@ -157,7 +157,7 @@ GRID v3 adds a persistent local life layer: identity, goals, commitments, a hear
 
 `/life` starts the conversation itself: it greets you in the current persona, says what it is about to work on, reports each cycle, and asks a follow-up when it needs a decision. It also checks in every few cycles. **Esc twice** is the only thing you need to return to manual chat.
 
-A `/life <task>` goal is **one-shot**: after one successful cycle it is marked done and autopilot returns to manual. For a long-running goal, add it explicitly with `/life goal add ongoing <title>`.
+A `/life <task>` goal is **one-shot**: after one successful cycle it is marked done, but GRID **stays awake** and asks what to do next. It only returns to manual when you press **Esc twice**. For a long-running goal, add it explicitly with `/life goal add ongoing <title>`.
 
 Defaults live in `config.json` under `life`: 30-minute heartbeat, quiet hours 22:00–08:00, a 09:00 brief, and daily budgets of 12 actions and 6 messages. The standalone `python grid_life.py status|tick|log` works when GRID is closed.
 
@@ -181,7 +181,10 @@ If no persona is set, `/life` asks for a name first. It also asks what to work o
 - every tool goes through the permission policy before it runs;
 - it reads recent chats, durable memory, tool logs, scan results and local database counts to understand you better, can inspect more with `db_query`, and redacts obvious secrets;
 - with a cloud backend, this local context is omitted unless `life.allow_cloud_context` is true;
+- after a one-shot goal it asks what to do next instead of exiting;
 - when the daily action budget is reached, it rests and tells you, but stays in autopilot until Esc twice.
+
+`autopilot_interval_seconds` controls the gap between work cycles, `autopilot_checkin_cycles` controls check-ins, and `autopilot_idle_seconds` controls how long it waits before asking again when there are no goals.
 
 ### Agent Skills
 

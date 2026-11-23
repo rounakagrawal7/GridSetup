@@ -4,8 +4,9 @@
 
 - `/life` is autonomous autopilot: one command, Esc twice returns to manual.
   GRID greets, reports each cycle, asks `ASK_USER` follow-ups and checks in
-  every few cycles. One-shot tasks complete after one successful cycle and
-  return to manual; ongoing goals stay active.
+  every few cycles. One-shot tasks complete after one successful cycle, then
+  GRID stays awake and asks what is next. Ongoing goals stay active. Only
+  Esc twice returns to manual.
 - GRID Life adopts the `/persona` identity. `/persona set TinaGrid` makes
   `/life` TinaGrid, knows `Moltbook as TinaGrid`, and gives the model the full
   80-tool registry. With no persona, `/life` asks; with no goals, it asks what

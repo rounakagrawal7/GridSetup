@@ -180,14 +180,16 @@ class AwakeTests(unittest.TestCase):
         context = build_local_context(orchestrator, FakeLife())
         self.assertIn("omitted", context)
 
-    def test_autopilot_completes_one_shot_goal(self):
+    def test_autopilot_completes_one_shot_goal_and_stays_awake(self):
         life = FakeLife()
         orchestrator = FakeOrchestrator(response="done")
         runner = AutopilotRunner(
             life, orchestrator, FakeConsole(), {"mode": "read_only"}
         )
+        # The idle prompt would block on stdin; cancel after the completion.
+        runner._idle = lambda: (runner.token.cancel(), "")[1]
         result = runner.run()
-        self.assertIn("Autopilot complete", result)
+        self.assertIn("Autopilot stopped", result)
         self.assertEqual(life.completed, ["g-test"])
         self.assertEqual(len(life.work), 1)
 

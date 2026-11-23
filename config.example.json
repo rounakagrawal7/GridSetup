@@ -13,6 +13,7 @@
     "max_messages_per_day": 6,
     "autopilot_interval_seconds": 20,
     "autopilot_checkin_cycles": 3,
+    "autopilot_idle_seconds": 60,
     "include_local_context": true,
     "allow_cloud_context": false,
     "compress_context": false,
