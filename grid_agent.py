@@ -781,6 +781,7 @@ class Tools:
     memory_ref = None
     recaller = None
     skills = None
+    skilldocs = None
     life = None
     cancel_token = None
     policy = None
@@ -3603,6 +3604,24 @@ Comment Data:
     # ── schema for LLM ──────────────────────────────────────
 
     @staticmethod
+    def _skill_search(query: str) -> str:
+        if not Tools.skilldocs:
+            return "SKILL.md skills are not initialized."
+        return Tools.skilldocs.search_text(query)
+
+    @staticmethod
+    def _skill_load(name: str) -> str:
+        if not Tools.skilldocs:
+            return "SKILL.md skills are not initialized."
+        return Tools.skilldocs.load_text(name)
+
+    @staticmethod
+    def _skill_read(spec: str) -> str:
+        if not Tools.skilldocs:
+            return "SKILL.md skills are not initialized."
+        return Tools.skilldocs.read_text(spec)
+
+    @staticmethod
     def _build_schema() -> str:
         lines = [
             "You have access to these tools. If the user's request requires one, "
@@ -3833,6 +3852,9 @@ Tools._reg("youtube_transcript", Tools._youtube_transcript, "Fetch transcript fr
 Tools._reg("save_skill",         Tools._save_skill,       "Create a new reusable skill from Python code. Input format: name: <name>\\ndescription: <desc>\\ninput_desc: <input_desc>\\ncode: <Python code with def run(input):>. The code must have a `def run(input: str) -> str:` function. Optionally add `schema: <JSON>` for typed parameters.", "'name: my_skill\\ndescription: ...\\ninput_desc: ...\\ncode: ...'")
 Tools._reg("delete_skill",       Tools._delete_skill,     "Delete a skill by name. Input: the skill name to remove.", "skill_name")
 Tools._reg("list_skills",        Tools._list_skills,      "List all user-created skills with status.", "(ignored)")
+Tools._reg("skill_search",       Tools._skill_search,     "Search procedural SKILL.md skills by name or description. Use before a specialized workflow.", "query text")
+Tools._reg("skill_load",         Tools._skill_load,       "Load a SKILL.md procedure by name. Returns its instructions and metadata.", "skill name")
+Tools._reg("skill_read",         Tools._skill_read,       "Read a reference or script inside a SKILL.md skill. Input: skill-name/relative/path.", "skill-name/references/file.md")
 Tools._reg("social",             moltbook_social,         "Moltbook social platform: persona, register, profile, post, reply, feed, search, vote, submolts, follow, agents, switch, auto, auto-daemon, writeup, history. All actions auto-logged. Use 'social help' for full reference.", "'social persona set MyName' or 'social auto' or 'social history' or 'social feed hot 10' or 'social writeup'")
 Tools._reg("gcal",               google_calendar,         "Google Calendar integration. Sub-commands: setup, calendars, events, event, create, update, delete, search. Use 'gcal help' for full reference.", "'gcal events' or 'gcal create primary | Meeting | 2026-07-29T14:00:00 | 2026-07-29T15:00:00'")
 Tools._reg("gsheet",             google_sheets,          "Google Sheets + Excel + data analytics. Sub-commands: list, read, create, write, append (Google Sheets); open, new, edit, addrow (local .xlsx); stats, analyze, plot (analytics). Use 'gsheet help' for full reference.", "'gsheet list' or 'gsheet stats data.xlsx' or 'gsheet open budget.xlsx'")
@@ -4001,6 +4023,19 @@ class GridOrchestrator:
                 "[PLANNER MODE] Before answering, first create a numbered step-by-step plan "
                 "wrapped in ```plan ... ```. Then execute each step one by one using tools.\n\n"
             )
+
+        if getattr(Tools, "skilldocs", None):
+            try:
+                skills_summary = Tools.skilldocs.summary()
+                if skills_summary:
+                    base_prompt += (
+                        "\n=== PROCEDURAL SKILLS (SKILL.md) ===\n"
+                        "Use skill_search <query> to find one, skill_load <name> to load it, "
+                        "and skill_read <name>/<relative-path> for references.\n"
+                        + skills_summary + "\n\n"
+                    )
+            except Exception:
+                pass
 
         messages = [{"role": "system", "content": base_prompt + Tools.SCHEMA}]
         if self.recaller is not None:
@@ -4947,6 +4982,7 @@ def run_checks(args) -> int:
         ("pytesseract", "pytesseract"), ("pyautogui", "pyautogui"),
         ("keyboard", "keyboard"), ("googleapiclient", "google-api-python-client"),
         ("google_auth_oauthlib", "google-auth-oauthlib"),
+        ("yaml", "pyyaml"),
     ]:
         try:
             __import__(mod)
@@ -4959,6 +4995,13 @@ def run_checks(args) -> int:
         add("import prompt-toolkit", True, "Tab completion")
     except Exception:
         add("import prompt-toolkit", False, "completion disabled", required=False)
+
+    try:
+        from grid_skilldocs import SkillDocManager
+        docs = SkillDocManager()
+        add("SKILL.md skills", bool(docs.valid()), f"{len(docs.valid())} valid", required=False)
+    except Exception as e:
+        add("SKILL.md skills", False, str(e), required=False)
 
     add("backend package", HAS_OLLAMA if backend_type == "ollama" else HAS_OPENAI, backend_type)
     add("config: model", bool(model), model or "(missing)")
@@ -5295,6 +5338,11 @@ def main(argv=None):
 
     Tools.skills = SkillManager()
     Tools.skills.register_all()
+    try:
+        from grid_skilldocs import SkillDocManager
+        Tools.skilldocs = SkillDocManager()
+    except Exception as e:
+        console.print(f"  [{M_DIM}][!] SKILL.md skills unavailable: {e}[/]")
 
     pb = PocketBaseManager()
     started = pb.start()

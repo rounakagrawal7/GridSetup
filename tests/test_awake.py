@@ -128,6 +128,15 @@ class AwakeTests(unittest.TestCase):
         result = runner.run()
         self.assertIn("No active goals", result)
 
+    def test_awake_prompt_mentions_persona_and_skills(self):
+        from grid_awake import build_awake_prompt
+
+        prompt = build_awake_prompt(FakeLife(), "Test goal")
+        self.assertIn("TinaGrid", prompt)
+        self.assertIn("Moltbook as TinaGrid", prompt)
+        self.assertIn("skill_search", prompt)
+        self.assertIn("skill_load", prompt)
+
     def test_local_context_reads_chat_and_redacts_secrets(self):
         class FakeMemory:
             history = [

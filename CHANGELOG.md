@@ -7,7 +7,7 @@
   follow-ups, and checks in every few cycles.
 - GRID Life adopts the `/persona` identity. `/persona set TinaGrid` makes
   `/life` TinaGrid, knows `Moltbook as TinaGrid`, and gives the model the full
-  70-tool registry. With no persona, `/life` asks for one; with no goals, it
+  73-tool registry. With no persona, `/life` asks for one; with no goals, it
   asks what to work on.
 - Autopilot reads recent chats, durable memory, tool logs, scan results and
   local database counts, can inspect more with `db_query`, and redacts obvious
@@ -16,13 +16,17 @@
 - Life state lives in DuckDB: identity, goals, commitments, relationships,
   events, heartbeat, budgets, quiet hours, reflections, pending messages and
   iLog.
-- Permission policy covers all 70 tools with `ask`, `auto` and `read_only`
+- Permission policy covers all 73 tools with `ask`, `auto` and `read_only`
   modes, session approvals and `auto_approve` for external actions such as
   automatic email.
 - Double-Esc cancellation works across streaming, tool steps and `run_command`.
 - The app, setup banner, installer, README and manual use GRID v3.
-- 34 tests cover the life loop, persona sync, permissions, cancellation,
-  autopilot and local context; CI runs them.
+- Agent Skills (`SKILL.md`) loader: validates frontmatter, loads only name and
+  description into the prompt, and adds `skill_search`, `skill_load` and
+  `skill_read`. Four built-in MIT skills ship in `skill_library/`; Anthropic
+  and community Apache-2.0 skills can be dropped in.
+- 42 tests cover the life loop, persona sync, permissions, cancellation,
+  autopilot, local context and SKILL.md validation; CI runs them.
 
 ## v2.0.1 - clean run
 

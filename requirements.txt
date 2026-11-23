@@ -4,6 +4,7 @@
 # Core
 rich>=13.0
 prompt-toolkit>=3.0
+PyYAML>=6.0
 
 # LLM Backends
 openai>=1.0

@@ -6,7 +6,7 @@
 
 *An all-in-one, local-first agent for OSINT, networks, radio, satellites, microcontrollers, computer vision, and automation — with a persistent, human-like memory layer.*
 
-[![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-blue.svg)](https://www.python.org/) [![Local-First](https://img.shields.io/badge/Local--First-Optional%20Sync-green.svg)](README.md) [![Tools](https://img.shields.io/badge/70%2B%20Tools-Recon%2FRadio%2FSAT%2FIoT-orange.svg)](README.md) [![User Manual](https://img.shields.io/badge/User%20Manual-GRID_Tools_Test_Guide-blueviolet.svg)](GRID_Tools_Test_Guide.docx)
+[![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-blue.svg)](https://www.python.org/) [![Local-First](https://img.shields.io/badge/Local--First-Optional%20Sync-green.svg)](README.md) [![Tools](https://img.shields.io/badge/73%2B%20Tools-Recon%2FRadio%2FSAT%2FIoT-orange.svg)](README.md) [![User Manual](https://img.shields.io/badge/User%20Manual-GRID_Tools_Test_Guide-blueviolet.svg)](GRID_Tools_Test_Guide.docx)
 
 </div>
 
@@ -57,9 +57,9 @@ The latest release adds a real memory system that works across sessions with **z
 
 ## 🥊 GRID vs Hermes vs OpenClaw — Why GRID Wins
 
-GRID isn't another messaging tool for one AI. It's the **only agent that fuses a full OSINT / field-ops stack directly to a human-like memory**. Hermes and OpenClaw give you a *chat brain* with toys bolted on — GRID ships as a **recon dashboard, a radio rig, a satellite dish, a camera lab, and a microcontroller bench**, all in one terminal. And it does it with **1 file to run** (`python grid_agent.py`), **local-first operation**, and **70+ built-in tools / 100+ sub-commands**.
+GRID isn't another messaging tool for one AI. It's the **only agent that fuses a full OSINT / field-ops stack directly to a human-like memory**. Hermes and OpenClaw give you a *chat brain* with toys bolted on — GRID ships as a **recon dashboard, a radio rig, a satellite dish, a camera lab, and a microcontroller bench**, all in one terminal. And it does it with **1 file to run** (`python grid_agent.py`), **local-first operation**, and **73+ built-in tools / 100+ sub-commands**.
 
-| Capability | **GRID (v3) - 70+ tools** | Hermes | OpenClaw |
+| Capability | **GRID (v3) - 73+ tools** | Hermes | OpenClaw |
 |---|---|---|---|
 | 🧠 **4-tier memory** (persona · scenarios · atoms · offloaded refs) | ✅ built-in, auto-distills every 5 turns | ⚠️ SQLite + user modeling | ⚠️ file-based marks/YAML |
 | 🔍 **OSINT** (domain/IP/email/phone/username, dorking, webcam/CCTV) | ✅ **built-in** | ❌ none | ⚠️ web-search only |
@@ -129,7 +129,7 @@ Copy-Item config.example.json config.json
 .\.venv\Scripts\python.exe grid_agent.py --no-input
 ```
 
-`--check` verifies Python, the required imports, `config.json`, the Ollama server, the selected model and the 70-tool registry. It does not start PocketBase or touch `grid_data.duckdb`.
+`--check` verifies Python, the required imports, `config.json`, the Ollama server, the selected model and the 73-tool registry. It does not start PocketBase or touch `grid_data.duckdb`.
 
 Useful flags:
 
@@ -139,7 +139,7 @@ Useful flags:
 
 If `--check` fails, fix the FAIL lines it prints. Do not launch until all required checks pass.
 
-If the model says it has no tools, make sure Ollama is running and the model supports at least a 16k context. GRID sets `num_ctx=16384`; a smaller context truncates the 70-tool schema.
+If the model says it has no tools, make sure Ollama is running and the model supports at least a 16k context. GRID sets `num_ctx=16384`; a smaller context truncates the 73-tool schema.
 
 ### Chat input
 
@@ -163,7 +163,7 @@ An explicit `/life pause` still wins. Advanced subcommands (`status`, `log`, `go
 
 GRID Life uses the same identity as `/persona`. If you set `/persona set TinaGrid`, then:
 - `/life` starts as TinaGrid and knows `Moltbook as TinaGrid`;
-- its prompt includes the persona, the persistent Moltbook history, and the full 70-tool registry;
+- its prompt includes the persona, the persistent Moltbook history, and the full 73-tool registry;
 - `/persona clear` resets the life identity to `GRID` and asks again on the next `/life`.
 
 If no persona is set, `/life` asks for a name first. It also asks what to work on if there are no active goals.
@@ -180,6 +180,22 @@ If no persona is set, `/life` asks for a name first. It also asks what to work o
 - it reads recent chats, durable memory, tool logs, scan results and local database counts to understand you better, can inspect more with `db_query`, and redacts obvious secrets;
 - with a cloud backend, this local context is omitted unless `life.allow_cloud_context` is true;
 - when the daily action budget is reached, it rests and tells you, but stays in autopilot until Esc twice.
+
+### Agent Skills
+
+GRID v3 supports the Agent Skills `SKILL.md` standard. Only each skill’s name
+and description are loaded into the prompt; the procedure is loaded on demand:
+
+- `skill_search <query>` — find a skill
+- `skill_load <name>` — load its instructions
+- `skill_read <name>/references/file.md` — read a referenced file
+
+Four MIT skills ship in `skill_library/`: `daily-brief`, `osint-report`,
+`local-recon` and `skill-authoring`. Drop an Anthropic or community skill into
+`skills/<name>/SKILL.md` or `skill_library/<name>/`; GRID validates the
+frontmatter and name. Keep the skill’s license, and review any `scripts/`
+before running it. `/life` sees the same skill list and can load them during
+autopilot.
 
 ### Permissions and auto-email
 
@@ -228,7 +244,9 @@ The `email` section must already have working SMTP settings. With `mode: "auto"`
 | `grid_satellite.py` | Satellite tracking (ISS, passes, TLE, catalog) |
 | `grid_radio.py` | Radio & SDR (Radio-Browser, KiwiSDR, RTL-SDR) |
 | `grid_micro.py` | Microcontroller IoT (ESP32, Arduino, LoRa) |
-| `grid_skills.py` | Self-authored reusable skills |
+| `grid_skills.py` | Self-authored Python skills |
+| `grid_skilldocs.py` | Agent Skills (`SKILL.md`) discovery, validation and loading |
+| `skill_library/` | Built-in SKILL.md procedures (MIT) |
 | `grid_life.py` | Persistent identity, goals, commitments, heartbeat and iLog |
 | `grid_awake.py` | Foreground awake runs, step display and double-Esc cancel |
 | `grid_permissions.py` | Ask/auto/read-only policy for autonomous tool use |

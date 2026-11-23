@@ -65,14 +65,15 @@ The life loop must be able to do nothing. "Rest" is a first-class action.
 - A second database or a hidden memory store.
 - Unbounded background loops.
 - Screen/microphone awareness in the first release.
-- Replacing the existing 70 tools with a new agent framework.
+- Replacing the existing 73 tools with a new agent framework.
 
 ## Delivery slices
 
 1. Life engine + `/life` + tests (landed).
 2. Foreground `/life` autopilot, persona sync, permission policy, local
    context and double-Esc cancel (landed).
-3. Agent Skills loader.
+3. Agent Skills loader (landed): `SKILL.md` validation, four built-in skills,
+   `skill_search`, `skill_load`, `skill_read`.
 4. Eval harness.
 5. MCP client, then GRID MCP server.
 6. MarkItDown document tool.
