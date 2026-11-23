@@ -9,6 +9,8 @@
 - Added `--install-missing`: optional-package install is now opt-in. Missing
   optional packages are reported and their tools stay disabled.
 - Added `run.ps1` and a “Clean start” README section with a venv workflow.
+- `config.example.json` is now an Ollama-ready template; a fresh clone copies it
+  to `config.json` before running `--check`.
 - The app starts Ollama itself when it is not running, then reaches the menu.
 - Ollama now uses `num_ctx=16384`, so the 70-tool schema is not truncated and
   natural-language tool calls work on `gemma4:e2b`.

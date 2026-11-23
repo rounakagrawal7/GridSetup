@@ -118,10 +118,14 @@ python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install --upgrade pip
 .\.venv\Scripts\pip.exe install -r requirements.txt
 
-# 3. Check the setup before launching
+# 3. Create config from the example
+Copy-Item config.example.json config.json
+# edit config.json if your Ollama model name differs
+
+# 4. Check the setup before launching
 .\.venv\Scripts\python.exe grid_agent.py --check
 
-# 4. Launch without the setup prompts
+# 5. Launch without the setup prompts
 .\.venv\Scripts\python.exe grid_agent.py --no-input
 ```
 

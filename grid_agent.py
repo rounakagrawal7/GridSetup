@@ -4819,6 +4819,7 @@ def run_checks(args) -> int:
     if failures:
         print(f"{failures} required check(s) failed.")
         print("Fix the FAIL lines, then run: python grid_agent.py --check")
+        print("If config.json is missing, run: Copy-Item config.example.json config.json")
         return 1
     print("All required checks passed.")
     print("Start with: python grid_agent.py --no-input")
