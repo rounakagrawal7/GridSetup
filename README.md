@@ -141,6 +141,10 @@ If `--check` fails, fix the FAIL lines it prints. Do not launch until all requir
 
 If the model says it has no tools, make sure Ollama is running and the model supports at least a 16k context. GRID sets `num_ctx=16384`; a smaller context truncates the 70-tool schema.
 
+### Chat input
+
+Type `/` and press **Tab** to complete a slash command. Subcommands complete too (`/persona ` shows `set` and `clear`). **Up/Down** walks prompt history, and matching history appears as grey inline text.
+
 
 > 📘 After first launch, open **`GRID_Tools_Test_Guide.docx`** for the full command reference.
 

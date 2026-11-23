@@ -15,6 +15,7 @@ The packages in `requirements.txt` are installed separately and retain their own
 licenses. The main ones are:
 
 - Rich — MIT
+- prompt_toolkit — BSD-3-Clause
 - Requests — Apache 2.0
 - Beautiful Soup — MIT
 - DuckDB — MIT

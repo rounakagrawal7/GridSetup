@@ -43,6 +43,16 @@ from grid_game import game_main as game_tool
 from rich.text import Text
 from rich import box
 
+# Windows redirected output defaults to the ANSI code page (cp1252), which
+# cannot encode box-drawing characters. Force UTF-8 where supported so piping
+# or logging GRID never crashes on a Unicode header.
+if sys.platform.startswith("win"):
+    for _stream in (sys.stdout, sys.stderr):
+        try:
+            _stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
 HAS_OPENAI = False
 HAS_OLLAMA = False
 
@@ -3974,7 +3984,8 @@ class GridOrchestrator:
             (r"(?:what is|what's|tell me|show me|get|show)\s+(?:my\s+)?system\s+(?:info|information|specs?)", "system_info", ""),
             (r"(?:take|get)\s+a?\s*screenshot", "screenshot", ""),
             (r"(?:what is|what's|get|show)\s+(?:the )?weather\s+(?:in |for |at )?(.+)", "weather", "{0}"),
-            (r"(?:search|google|look up)\s+(?:the web|the internet|web|for)?\s*(.+)", "web_search", "{0}"),
+            (r"(?:search|google|look up)\s+(?:the web|the internet|web)?\s*(.+)", "web_search",
+             lambda m: re.sub(r"^(?:online\s+)?(?:about|for|on)\s+", "", m.group(1).strip(), flags=re.I)),
             (r"dork\s+(?:for|search|query)?\s*(.+)", "dork", "{0}"),
             (r"(?:run|use|try)\s+a?\s*(?:google\s+)?dork\s+(.+)", "dork", "{0}"),
             (r"(?:ghostcam|omnieye|ghost.cam)\s*(start|stop|launch|kill)?", "ghostcam", "{0}"),
@@ -4155,7 +4166,10 @@ class GridOrchestrator:
             if step_logs is not None:
                 step_logs.append(f"[bold {M}]Tool:[/] {tool_name}    [{M_DIM}]Input: {tool_input[:80]}[/]")
             result = Tools.safe_execute(tool_name, tool_input)
-            return f"[Tool: {tool_name}]\n{self._render_pipe_table(result)}"
+            body = self._render_pipe_table(result)
+            if step_logs is not None:
+                return body
+            return f"[Tool: {tool_name}]\n{body}"
 
         # If no auto-detect, use LLM with multi-turn chain
         tool_chain = []
@@ -4604,14 +4618,114 @@ def _matrix_banner():
 # 9.5 Multiline input helper
 # ═══════════════════════════════════════════════════════════════
 
+SLASH_COMMANDS = {
+    "/apikey": "Configure API keys",
+    "/back": "Return to main menu",
+    "/clear": "Clear conversation history",
+    "/comms": "Communication channels (Telegram, etc.)",
+    "/ctf": "Local CTF sandbox",
+    "/exit": "Save and exit",
+    "/export": "Export chat (json/txt/html)",
+    "/game": "Play game worlds & MiniGrid RL envs",
+    "/gcal": "Google Calendar",
+    "/gsheet": "Google Sheets + Excel",
+    "/help": "Show this help (also /?)",
+    "/jobs": "Manage dynamic skills",
+    "/memory": "View, recall or clear layered memory",
+    "/menu": "Return to main menu",
+    "/model": "Switch LLM model",
+    "/pb": "PocketBase: start/stop/install/sync",
+    "/persona": "Set/view/clear your GRID identity",
+    "/plan": "Toggle planner mode (step-by-step)",
+    "/ref": "Read a full offloaded tool output",
+    "/save": "Save conversation now",
+    "/social": "Moltbook social platform",
+    "/tools": "View & toggle tools",
+}
+
+SLASH_SUBCOMMANDS = {
+    "/ctf": ["start", "status", "hint", "submit", "score", "list", "reset"],
+    "/export": ["json", "txt", "html"],
+    "/game": ["world", "minigrid"],
+    "/gcal": ["setup", "calendars", "events", "create", "search"],
+    "/gsheet": ["list", "read", "new", "stats", "plot"],
+    "/jobs": ["list", "new", "show", "edit", "toggle", "delete"],
+    "/memory": ["status", "clear"],
+    "/pb": ["start", "stop", "install", "sync"],
+    "/persona": ["set", "clear"],
+    "/social": ["auto", "daemon", "history"],
+}
+
+_PROMPT_SESSION = None
+
+
+def _plain_prompt(prompt: str) -> str:
+    """Turn Rich markup into the plain text prompt_toolkit expects."""
+    return re.sub(r"\[[^\]]*\]", "", prompt).strip() + ": "
+
+
+def _make_slash_completer():
+    from prompt_toolkit.completion import Completer, Completion
+
+    class SlashCompleter(Completer):
+        def get_completions(self, document, complete_event):
+            text = document.text_before_cursor
+            if not text.startswith("/"):
+                return
+            if " " in text:
+                cmd, arg = text.split(" ", 1)
+                if " " in arg:
+                    return
+                for sub in SLASH_SUBCOMMANDS.get(cmd, []):
+                    if sub.startswith(arg):
+                        yield Completion(sub, start_position=-len(arg), display=sub, display_meta=cmd)
+            else:
+                for cmd, desc in SLASH_COMMANDS.items():
+                    if cmd.startswith(text):
+                        yield Completion(cmd, start_position=-len(text), display=cmd, display_meta=desc)
+
+    return SlashCompleter()
+
+
+def _get_prompt_session():
+    global _PROMPT_SESSION
+    if _PROMPT_SESSION is not None:
+        return _PROMPT_SESSION
+    from prompt_toolkit import PromptSession
+    from prompt_toolkit.auto_suggest import AutoSuggestFromHistory
+    from prompt_toolkit.history import InMemoryHistory
+    from prompt_toolkit.styles import Style
+
+    _PROMPT_SESSION = PromptSession(
+        completer=_make_slash_completer(),
+        complete_while_typing=True,
+        auto_suggest=AutoSuggestFromHistory(),
+        history=InMemoryHistory(),
+        style=Style.from_dict({"prompt": f"fg:{M} bold"}),
+    )
+    return _PROMPT_SESSION
+
+
+def _prompt_line(session, prompt: str) -> str:
+    if session is not None:
+        return session.prompt([("class:prompt", _plain_prompt(prompt))])
+    return Prompt.ask(prompt)
+
+
 def read_input(prompt: str) -> str:
     try:
-        line = Prompt.ask(prompt)
+        session = None
+        if sys.stdin and sys.stdout and sys.stdin.isatty() and sys.stdout.isatty():
+            try:
+                session = _get_prompt_session()
+            except Exception:
+                session = None
+        line = _prompt_line(session, prompt)
         stripped = line.rstrip()
         if stripped.endswith("\\"):
             parts = [stripped.rstrip("\\")]
             while True:
-                nxt = Prompt.ask(f"  [{M_DIM}]>[/]")
+                nxt = _prompt_line(session, f"  [{M_DIM}]>[/]")
                 if not nxt.strip():
                     break
                 parts.append(nxt)
@@ -4768,6 +4882,12 @@ def run_checks(args) -> int:
             add(f"import {label}", True)
         except Exception as e:
             add(f"import {label}", False, str(e))
+
+    try:
+        import prompt_toolkit  # noqa: F401
+        add("import prompt-toolkit", True, "Tab completion")
+    except Exception:
+        add("import prompt-toolkit", False, "completion disabled", required=False)
 
     add("backend package", HAS_OLLAMA if backend_type == "ollama" else HAS_OPENAI, backend_type)
     add("config: model", bool(model), model or "(missing)")
@@ -5290,15 +5410,31 @@ f"16 capability groups: [bold]Computer Use[/] | [bold]Files[/] | [bold]Shell[/] 
                             tbl.add_row(name, info["desc"], status)
                         console.print(tbl)
                         console.print()
-                        t = Prompt.ask(f"  [{M}]Toggle a tool by name, or Enter to go back[/]", default="")
-                        if t.strip() in Tools.registry:
-                            name = t.strip()
-                            if name in Tools.enabled:
-                                Tools.enabled.discard(name)
-                                console.print(f"  [red][x] {name} disabled[/]")
+                        while True:
+                            t = Prompt.ask(
+                                f"  [{M}]Toggle a tool by name, or Enter to go back[/]",
+                                default="",
+                            ).strip()
+                            if not t:
+                                break
+                            if t.lower() in ("/help", "help", "?"):
+                                console.print(
+                                    f"  [{M_DIM}]Type a tool name to enable or disable it. "
+                                    f"Press Enter to go back.[/]"
+                                )
+                                continue
+                            if t not in Tools.registry:
+                                console.print(
+                                    f"  [{M_DIM}]No tool named '{t}'. "
+                                    f"Press Enter to go back.[/]"
+                                )
+                                continue
+                            if t in Tools.enabled:
+                                Tools.enabled.discard(t)
+                                console.print(f"  [red][x] {t} disabled[/]")
                             else:
-                                Tools.enabled.add(name)
-                                console.print(f"  [{M}][+] {name} enabled[/]")
+                                Tools.enabled.add(t)
+                                console.print(f"  [{M}][+] {t} enabled[/]")
                             Tools.SCHEMA = Tools._build_schema()
                         console.print()
                         continue
@@ -5440,9 +5576,9 @@ f"16 capability groups: [bold]Computer Use[/] | [bold]Files[/] | [bold]Shell[/] 
 
                     if cmd == "/persona" or cmd.startswith("/persona "):
                         parts = cmd.split(maxsplit=1)
-                        sub = parts[1].strip() if len(parts) > 1 else "show"
+                        sub = parts[1].strip() if len(parts) > 1 else ""
                         from grid_agent_social import moltbook_social
-                        result = moltbook_social(f"persona {sub}")
+                        result = moltbook_social(f"persona {sub}".strip())
                         console.print(f"  [{M}]{result}[/]\n")
                         continue
 
@@ -5660,32 +5796,19 @@ f"16 capability groups: [bold]Computer Use[/] | [bold]Files[/] | [bold]Shell[/] 
 
                     if cmd in ("/help", "/?"):
                         tbl = Table(box=box.SIMPLE, show_header=False, border_style=M_DIM)
-                        tbl.add_column("Command", style=f"bold {M}", width=14)
+                        tbl.add_column("Command", style=f"bold {M}", width=18)
                         tbl.add_column("Description", style=M)
-                        for c, d in [
-                            ("/exit /back /menu", "Return to menu"),
-                            ("/model", "Switch LLM model"),
-                            ("/tools", "View & toggle tools"),
-                            ("/plan", "Toggle planner mode (step-by-step)"),
-                            ("/export <fmt>", "Export chat (json/txt/html)"),
-                            ("/save", "Save conversation now"),
-                            ("/clear", "Clear conversation history"),
-                            ("/jobs", "Manage dynamic skills (list/new/show/edit/toggle/delete)"),
-                            ("/social", "Moltbook social platform (auto/daemon/history)"),
-                            ("/ctf", "Local CTF sandbox (start/status/hint/submit/score)"),
-                            ("/game", "Play game worlds & MiniGrid RL envs (map/move/attack/step)"),
-                            ("/gcal", "Google Calendar: events, create, search, sync"),
-                            ("/gsheet", "Google Sheets + Excel: read, edit, stats, analyze, plot"),
-                            ("/persona [set|clear]", "Set/view/clear your GRID identity for agent platforms"),
-                            ("/memory [query|clear]", "View layered memory, recall relevant facts, or clear it"),
-                            ("/ref <id>", "Read a full offloaded tool output"),
-                            ("/pb", "PocketBase: start/stop/install/sync"),
-                            ("/comms", "Communication channels (Telegram, etc.)"),
-                            ("/help /?", "Show this help"),
-                        ]:
+                        for c, d in SLASH_COMMANDS.items():
                             tbl.add_row(c, d)
                         console.print(Panel(tbl, title=f"[{M}]Commands[/]", border_style=M))
-                        console.print()
+                        console.print(f"  [{M_DIM}]Tip: type / and press Tab to complete commands.[/]\n")
+                        continue
+
+                    if cmd.startswith("/"):
+                        console.print(
+                            f"  [{M_DIM}]Unknown command '{cmd}'. "
+                            f"Type /help for the command list.[/]\n"
+                        )
                         continue
 
                     if orchestrator.plan_mode:

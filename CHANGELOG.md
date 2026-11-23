@@ -24,6 +24,17 @@
 - User manual: aligned the capability-group count to 16 and removed two
   duplicated capability bullets.
 - CI now fails if the registry drops below 70 tools.
+- Chat input uses `prompt_toolkit`: Tab completes `/` commands and their
+  subcommands, Up/Down browses history, and matching history is suggested
+  inline. Piped input keeps the plain prompt.
+- `/persona` with no argument now shows the current identity instead of a
+  usage line.
+- Unknown `/` commands print a clear error instead of being sent to the model.
+- `/tools` stays open for multiple toggles and explains unknown tool names.
+- Web searches strip filler from queries like “search online about X”, and
+  auto-detected tool results no longer print a duplicate `[Tool: ...]` header.
+- Windows redirected output is forced to UTF-8, so Unicode headers no longer
+  crash when output is piped or logged.
 - The app starts Ollama itself when it is not running, then reaches the menu.
 - Ollama now uses `num_ctx=16384`, so the 70-tool schema is not truncated and
   natural-language tool calls work on `gemma4:e2b`.
