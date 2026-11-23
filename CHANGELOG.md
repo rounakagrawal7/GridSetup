@@ -26,7 +26,7 @@
 - Permission policy covers all 80 tools with `ask`, `auto` and `read_only`
   modes, session approvals and `auto_approve` for external actions.
 - Double-Esc cancellation works across streaming, tool steps and `run_command`.
-- 67 tests and 49 routing eval cases cover the life loop, persona sync,
+- 68 tests and 49 routing eval cases cover the life loop, persona sync,
   permissions, cancellation, autopilot, local context, skills, MCP, documents,
   optional tools and tray.
 

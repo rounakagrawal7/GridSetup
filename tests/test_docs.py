@@ -34,6 +34,32 @@ class DocumentReadTests(unittest.TestCase):
         self.assertIn("World", result)
         self.assertNotIn("bad()", result)
 
+    def test_html_fallback_without_bs4_or_markitdown(self):
+        path = self._write(
+            "fallback.html",
+            "<html><body><h1>Hello</h1><script>bad()</script><p>World</p></body></html>",
+        )
+        import sys
+
+        old_bs4 = sys.modules.get("bs4")
+        old_md = sys.modules.get("markitdown")
+        sys.modules["bs4"] = None
+        sys.modules["markitdown"] = None
+        try:
+            result = document_read(str(path))
+            self.assertIn("Hello", result)
+            self.assertIn("World", result)
+            self.assertNotIn("bad()", result)
+        finally:
+            if old_bs4 is None:
+                sys.modules.pop("bs4", None)
+            else:
+                sys.modules["bs4"] = old_bs4
+            if old_md is None:
+                sys.modules.pop("markitdown", None)
+            else:
+                sys.modules["markitdown"] = old_md
+
     def test_json_document(self):
         path = self._write("data.json", '{"name": "grid", "ok": true}')
         result = document_read(str(path))

@@ -7,6 +7,7 @@ lightweight fallbacks so the tool still works before the optional install.
 from __future__ import annotations
 
 import json
+import re
 import zipfile
 from pathlib import Path
 from xml.etree import ElementTree
@@ -21,15 +22,19 @@ def _read_text(path: Path) -> str:
 
 
 def _read_html(path: Path) -> str:
+    raw = _read_text(path)
     try:
         from bs4 import BeautifulSoup
 
-        soup = BeautifulSoup(_read_text(path), "html.parser")
+        soup = BeautifulSoup(raw, "html.parser")
         for tag in soup(["script", "style", "nav", "footer", "header"]):
             tag.decompose()
         return soup.get_text(separator="\n", strip=True)
     except Exception:
-        return _read_text(path)
+        # Keep the fallback useful even when bs4 is not installed.
+        text = re.sub(r"(?is)<(script|style).*?</\1>", " ", raw)
+        text = re.sub(r"(?s)<[^>]+>", " ", text)
+        return re.sub(r"\s+", " ", text).strip()
 
 
 def _read_docx(path: Path) -> str:
