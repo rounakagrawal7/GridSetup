@@ -11,6 +11,10 @@
     "brief_time": "09:00",
     "max_actions_per_day": 12,
     "max_messages_per_day": 6,
+    "autopilot_interval_seconds": 20,
+    "autopilot_checkin_cycles": 3,
+    "include_local_context": true,
+    "allow_cloud_context": false,
     "goal_stale_hours": 6,
     "reflection_hours": 24,
     "commitment_repeat_hours": 6

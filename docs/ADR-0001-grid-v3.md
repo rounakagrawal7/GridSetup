@@ -40,8 +40,9 @@ The life loop must be able to do nothing. "Rest" is a first-class action.
 - Every tool is classified by risk. Autonomous runs use `ask`, `auto` or
   `read_only`; external writes, shell, delete, send and hardware actions
   require confirmation unless the user explicitly auto-approves them.
-- A manual `/life wake` or `/life awake` bypasses quiet hours and the daily
-  action budget, but never an explicit `/life pause`.
+- `/life` starts autopilot and keeps working until Esc twice returns to
+  manual. It may message first, report progress, ask `ASK_USER` follow-ups and
+  check in. An explicit `/life pause` still wins.
 - GRID Life uses the same persona as `/persona`. The persona is the social
   identity (for example Moltbook as TinaGrid), and the awake prompt includes
   that identity, its social presence and the full toolset. If no persona is
@@ -50,6 +51,9 @@ The life loop must be able to do nothing. "Rest" is a first-class action.
   terminated immediately. Blocking network calls finish or time out.
 - No continuous screen recording, microphone capture or clipboard capture in
   the first release.
+- Autopilot may read recent chats, durable memory, tool logs, scan results and
+  local database summaries. Obvious secrets are redacted. Cloud backends omit
+  this context unless `life.allow_cloud_context` is explicitly true.
 - Observed content (web, files, messages) is untrusted and cannot inject tool
   calls.
 - Global pause and per-day budgets are mandatory.
@@ -66,14 +70,14 @@ The life loop must be able to do nothing. "Rest" is a first-class action.
 ## Delivery slices
 
 1. Life engine + `/life` + tests (landed).
-2. Foreground `/life awake` runner, permission policy and double-Esc cancel
-   (landed).
+2. Foreground `/life` autopilot, persona sync, permission policy, local
+   context and double-Esc cancel (landed).
 3. Agent Skills loader.
-3. Eval harness.
-4. MCP client, then GRID MCP server.
-5. MarkItDown document tool.
-6. Tray/autostart host and heartbeat.
-7. Optional tools: Sherlock, Nuclei, PlatformIO.
+4. Eval harness.
+5. MCP client, then GRID MCP server.
+6. MarkItDown document tool.
+7. Tray/autostart host and heartbeat.
+8. Optional tools: Sherlock, Nuclei, PlatformIO.
 
 Each slice must keep the current chat loop working and add an acceptance test.
 
@@ -89,7 +93,7 @@ Each slice must keep the current chat loop working and add an acceptance test.
 
 - `python -m unittest discover -s tests -v` on Windows CI.
 - `python grid_agent.py --check`.
-- Piped chat smoke test: `/life`, `/life goal add`, `/life tick`, `/life log`,
-  `/life pause`, `/life resume`.
+- Piped chat smoke test: `/life help`, `/life identity`, `/persona set`, and a
+  scripted autopilot run that cancels on a double-Esc token.
 - A future 24-hour simulated-clock test for budgets, quiet hours and duplicate
   suppression.

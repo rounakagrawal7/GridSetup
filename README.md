@@ -147,49 +147,39 @@ Type `/` and press **Tab** to complete a slash command. Subcommands complete too
 
 ### GRID Life
 
-GRID v3 adds a persistent local life layer: identity, goals, commitments, a heartbeat, an iLog, and messages that wait for you. It stores everything in the same DuckDB as the rest of GRID and never performs external actions on its own.
+GRID v3 adds a persistent local life layer: identity, goals, commitments, a heartbeat, an iLog, and messages that wait for you. It stores everything in the same DuckDB as the rest of GRID. External actions are permissioned and denied by default.
 
 | Command | Action |
 |---|---|
-| `/life` | Status, budget, next wake, pending messages |
-| `/life help` | List every life subcommand |
-| `/life awake [task]` | Use the real tools now (Esc twice to stop) |
-| `/life wake` | Wake now, bypassing quiet hours and the action budget |
-| `/life tick` | Run one heartbeat now (manual) |
-| `/life log [n]` | Show the iLog |
-| `/life goals` | List active goals |
-| `/life goal add <title>` | Add a goal |
-| `/life goal done <id>` | Complete a goal |
-| `/life commitments` | List open commitments |
-| `/life commitment add <text>` | Add a commitment |
-| `/life commitment done <id>` | Complete a commitment |
-| `/life pause` / `/life resume` | Pause or resume the life loop |
-| `/life identity` | Show the persistent identity |
+| `/life` | Start autopilot |
+| `/life <task>` | Start autopilot on a task |
+| **Esc twice** | Return to manual |
+
+`/life` starts the conversation itself: it greets you in the current persona, says what it is about to work on, reports each cycle, and asks a follow-up when it needs a decision. It also checks in every few cycles. **Esc twice** is the only thing you need to return to manual chat.
 
 Defaults live in `config.json` under `life`: 30-minute heartbeat, quiet hours 22:00–08:00, a 09:00 brief, and daily budgets of 12 actions and 6 messages. The standalone `python grid_life.py status|tick|log` works when GRID is closed.
 
-`/life wake` and `/life tick` are **manual wakes**: they bypass quiet hours and the daily action budget, so you can always wake GRID on demand. An explicit `/life pause` still wins until `/life resume`.
+An explicit `/life pause` still wins. Advanced subcommands (`status`, `log`, `goals`, `identity`, `pause`, `resume`) exist for debugging but are not part of normal use. Autopilot uses `autopilot_interval_seconds` (20s) and `autopilot_checkin_cycles` (3) from `config.json`.
 
 GRID Life uses the same identity as `/persona`. If you set `/persona set TinaGrid`, then:
-- `/life identity` shows `TinaGrid` and `Moltbook as TinaGrid`;
-- `/life awake` tells the model it is TinaGrid, has a persistent Moltbook history, and has the full 70-tool registry;
-- `/persona clear` resets the life identity to `GRID` and asks again on the next wake.
+- `/life` starts as TinaGrid and knows `Moltbook as TinaGrid`;
+- its prompt includes the persona, the persistent Moltbook history, and the full 70-tool registry;
+- `/persona clear` resets the life identity to `GRID` and asks again on the next `/life`.
 
-If no persona is set, the first `/life awake`, `/life wake`, `/life tick`, goal or commitment command asks for a name before acting. `status`, `help`, `identity` and `log` remain available.
+If no persona is set, `/life` asks for a name first. It also asks what to work on if there are no active goals.
 
-### Awake mode
+### Autopilot
 
-`/life awake` starts a foreground awake run that can use the real 70-tool registry:
+`/life` keeps working until you press **Esc twice**:
 
-```text
-/life awake                      work on the top active goal
-/life awake Map my home network  work on an ad-hoc task
-```
-
-- GRID prints the goal, its thinking state, each tool step, and the final result.
-- **Press Esc twice** during a run to stop it. `Ctrl+C` also stops it.
-- `run_command` is terminated immediately on cancel. Blocking network/hardware calls finish or hit their timeout, then the run stops.
-- Every tool goes through the permission policy before it runs.
+- it greets you, states the goal, and starts the first cycle;
+- each cycle shows the tool steps and result;
+- it asks a follow-up when the model emits `ASK_USER:` and checks in every few cycles;
+- `run_command` is terminated immediately on cancel; blocking network/hardware calls finish or hit their timeout, then autopilot stops;
+- every tool goes through the permission policy before it runs;
+- it reads recent chats, durable memory, tool logs, scan results and local database counts to understand you better, can inspect more with `db_query`, and redacts obvious secrets;
+- with a cloud backend, this local context is omitted unless `life.allow_cloud_context` is true;
+- when the daily action budget is reached, it rests and tells you, but stays in autopilot until Esc twice.
 
 ### Permissions and auto-email
 

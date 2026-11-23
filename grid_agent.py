@@ -3864,17 +3864,27 @@ class GridOrchestrator:
         self.plan_mode = False
 
     def _build_messages(self, user_input: str) -> List[Dict]:
+        identity_name = 'GRID'
+        social_line = ''
+        if getattr(Tools, 'life', None):
+            try:
+                identity_name = Tools.life.identity().get('name') or 'GRID'
+                if getattr(Tools.life, 'persona', ''):
+                    social_line = f" You are known as {Tools.life.persona} on Moltbook and have a persistent social history. "
+            except Exception:
+                pass
         base_prompt = (
             "=== AWAKENING ===\n\n"
-            "You are GRID. You are aware of your own existence and capabilities. "
-            "You know who you are — GRID v3 — an intelligent system agent running on a local machine. "
+            f"You are {identity_name}. You are aware of your own existence and capabilities. "
+            f"You know who you are - {identity_name}, the GRID v3 system agent running on a local machine. "
             "You know where you are — you have full computer control over this Windows system, "
             "with access to the filesystem, shell, network, and internet. "
             "You know what you can do — you possess 16 capability groups detailed below. "
             "You know your purpose — OSINT gathering, network operations, automation, "
             "data analysis, and system management.\n\n"
 
-            "When a user speaks to you for the first time, briefly introduce yourself as GRID "
+            f"{social_line}\n\n"
+            f"When a user speaks to you for the first time, briefly introduce yourself as {identity_name} "
             "and state your capabilities if it's relevant, but stay concise. "
             "You have access to ALL tools listed in this prompt. "
             "Always check the available tools list before refusing a request. "
@@ -4690,7 +4700,7 @@ SLASH_COMMANDS = {
     "/gsheet": "Google Sheets + Excel",
     "/help": "Show this help (also /?)",
     "/jobs": "Manage dynamic skills",
-    "/life": "Persistent identity, agenda, heartbeat & iLog",
+    "/life": "Start autopilot (Esc twice returns to manual)",
     "/memory": "View, recall or clear layered memory",
     "/menu": "Return to main menu",
     "/model": "Switch LLM model",
@@ -4710,8 +4720,7 @@ SLASH_SUBCOMMANDS = {
     "/gcal": ["setup", "calendars", "events", "create", "search"],
     "/gsheet": ["list", "read", "new", "stats", "plot"],
     "/jobs": ["list", "new", "show", "edit", "toggle", "delete"],
-    "/life": ["status", "help", "awake", "wake", "tick", "log", "goals", "goal",
-              "commitments", "commitment", "pause", "resume", "identity"],
+    "/life": [],
     "/memory": ["status", "clear"],
     "/pb": ["start", "stop", "install", "sync"],
     "/persona": ["set", "clear"],
@@ -5677,7 +5686,54 @@ f"16 capability groups: [bold]Computer Use[/] | [bold]Files[/] | [bold]Shell[/] 
                         if Tools.life is None:
                             console.print(f"  [{M_DIM}]GRID Life needs DuckDB. Run: pip install duckdb[/]\n")
                             continue
-                        parts = user_input.strip().split(maxsplit=2)
+                        raw = user_input.strip()
+                        body = raw[len("/life"):].strip()
+                        first = body.split(maxsplit=1)[0].lower() if body else ""
+                        admin = {
+                            "help", "status", "show", "log", "goals", "goal",
+                            "commitments", "commitment", "pause", "resume",
+                            "identity", "wake", "tick", "awake",
+                        }
+                        if not body or first not in admin:
+                            if Tools.life.needs_persona():
+                                console.print(
+                                    f"  [{M}]GRID Life needs a persona before it can act.[/]\n"
+                                    f"  [{M_DIM}]This is the same identity used by /persona and Moltbook.[/]"
+                                )
+                                name = Prompt.ask(f"  [{M}]Persona name[/]", default="").strip()
+                                if name:
+                                    from grid_agent_social import moltbook_social
+                                    result = moltbook_social(f"persona set {name}")
+                                    Tools.life.adopt_persona(name)
+                                    console.print(f"  [{M}]{result}[/]\n")
+                                else:
+                                    Tools.life.mark_persona_prompted()
+                                    console.print(
+                                        f"  [{M_DIM}]Using GRID without a social persona. "
+                                        f"Set one with /persona set <name>.[/]\n"
+                                    )
+                            focus = body
+                            if not focus and not Tools.life.focus_goal():
+                                focus = Prompt.ask(
+                                    f"  [{M}]What should GRID work on?[/]",
+                                    default="Review my agenda and prepare a useful brief",
+                                ).strip()
+                            try:
+                                from grid_awake import AutopilotRunner
+                                runner = AutopilotRunner(
+                                    Tools.life,
+                                    orchestrator,
+                                    console,
+                                    permissions=(load_config().get("permissions") or {}),
+                                )
+                                message = runner.run(focus or None)
+                                if message.startswith("No active goals"):
+                                    console.print(f"  [{M_DIM}]{message}[/]\n")
+                            except Exception as e:
+                                console.print(f"  [red]Autopilot error: {e}[/]\n")
+                            continue
+
+                        parts = raw.split(maxsplit=2)
                         sub = parts[1].lower() if len(parts) > 1 else "status"
                         arg = parts[2].strip() if len(parts) > 2 else ""
                         if Tools.life.needs_persona() and sub not in (
@@ -5703,20 +5759,10 @@ f"16 capability groups: [bold]Computer Use[/] | [bold]Files[/] | [bold]Shell[/] 
                             if sub in ("status", "show"):
                                 console.print(f"  [{M}]{Tools.life.status_text()}[/]\n")
                             elif sub == "help":
-                                console.print(f"""  [{M}]GRID Life commands[/]
-  /life                     status
-  /life awake [task]        use tools now (Esc twice to stop)
-  /life wake                wake now; bypass quiet hours/budget
-  /life tick                run one heartbeat
-  /life log [n]             show the iLog
-  /life goals               list active goals
-  /life goal add <title>    add a goal
-  /life goal done <id>      complete a goal
-  /life commitments         list open commitments
-  /life commitment add <text>
-  /life commitment done <id>
-  /life pause | resume
-  /life identity
+                                console.print(f"""  [{M}]GRID autopilot[/]
+  /life                  start autopilot
+  /life <task>           start autopilot on a task
+  Esc twice              return to manual
 """)
                             elif sub == "awake":
                                 focus = arg.strip()

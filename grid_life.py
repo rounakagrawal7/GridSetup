@@ -22,6 +22,10 @@ LIFE_DEFAULTS: Dict[str, Any] = {
     "brief_window_minutes": 30,
     "max_actions_per_day": 12,
     "max_messages_per_day": 6,
+    "autopilot_interval_seconds": 20,
+    "autopilot_checkin_cycles": 3,
+    "include_local_context": True,
+    "allow_cloud_context": False,
     "goal_stale_hours": 6,
     "reflection_hours": 24,
     "commitment_repeat_hours": 6,
@@ -596,6 +600,10 @@ class LifeEngine:
     def _count(self, sql: str, params=()) -> int:
         row = self.conn.execute(sql, list(params)).fetchone()
         return int(row[0]) if row else 0
+
+    def can_act(self, now: Optional[datetime] = None) -> bool:
+        now = now or self.now_fn()
+        return self._actions_today(now) < int(self.cfg.get("max_actions_per_day", 12))
 
     def _actions_today(self, now: datetime) -> int:
         start, end = self._day_range(now)

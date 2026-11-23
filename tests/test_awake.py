@@ -1,6 +1,12 @@
 import unittest
 
-from grid_awake import AwakeRunner, CancelToken, DoubleEscapeWatcher
+from grid_awake import (
+    AutopilotRunner,
+    AwakeRunner,
+    CancelToken,
+    DoubleEscapeWatcher,
+    build_local_context,
+)
 
 
 class FakeLife:
@@ -10,6 +16,7 @@ class FakeLife:
             if goal else None
         )
         self.persona = persona
+        self.cfg = {"autopilot_interval_seconds": 5, "autopilot_checkin_cycles": 3}
         self.events = []
         self.work = []
 
@@ -31,17 +38,36 @@ class FakeLife:
     def focus_goal(self):
         return self.goal
 
+    def list_goals(self, status="active"):
+        return [self.goal] if self.goal else []
+
+    def add_goal(self, title, priority=3, **kwargs):
+        self.goal = {"id": "g-test", "title": title, "description": ""}
+        return f"Goal added: {title}"
+
+    def can_act(self):
+        return True
+
+    def pending_messages(self):
+        return []
+
+    def mark_delivered(self, event_id):
+        return None
+
     def record_event(self, *args):
         self.events.append(args)
+        return {"id": "e-test"}
 
     def record_work(self, *args):
         self.work.append(args)
 
 
 class FakeOrchestrator:
-    def __init__(self, response="done", cancel=False):
+    def __init__(self, response="done", cancel=False, memory=None, backend=None):
         self.response = response
         self.cancel = cancel
+        self.memory = memory
+        self.backend = backend
         self.prompts = []
 
     def process(self, prompt, stream=True, step_logs=None):
@@ -101,6 +127,43 @@ class AwakeTests(unittest.TestCase):
         runner = AwakeRunner(life, FakeOrchestrator(), FakeConsole(), {"mode": "read_only"})
         result = runner.run()
         self.assertIn("No active goals", result)
+
+    def test_local_context_reads_chat_and_redacts_secrets(self):
+        class FakeMemory:
+            history = [
+                {"role": "user", "content": "my api_key=SUPERSECRET please remember"},
+                {"role": "assistant", "content": "Noted."},
+            ]
+
+        class FakeBackend:
+            type = "ollama"
+
+        orchestrator = FakeOrchestrator(memory=FakeMemory(), backend=FakeBackend())
+        context = build_local_context(orchestrator, FakeLife())
+        self.assertIn("Recent conversation", context)
+        self.assertIn("[redacted]", context)
+        self.assertNotIn("SUPERSECRET", context)
+
+    def test_local_context_is_omitted_for_cloud_by_default(self):
+        class FakeMemory:
+            history = [{"role": "user", "content": "private"}]
+
+        class FakeBackend:
+            type = "openrouter"
+
+        orchestrator = FakeOrchestrator(memory=FakeMemory(), backend=FakeBackend())
+        context = build_local_context(orchestrator, FakeLife())
+        self.assertIn("omitted", context)
+
+    def test_autopilot_stops_on_cancel(self):
+        life = FakeLife()
+        orchestrator = FakeOrchestrator(response="[Cancelled by user]", cancel=True)
+        runner = AutopilotRunner(
+            life, orchestrator, FakeConsole(), {"mode": "read_only"}
+        )
+        result = runner.run()
+        self.assertIn("Autopilot stopped", result)
+        self.assertIn("cancelled", [event[0] for event in life.events])
 
 
 if __name__ == "__main__":

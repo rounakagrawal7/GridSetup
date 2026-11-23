@@ -2,32 +2,27 @@
 
 ## v3.0 - GRID Life (in progress)
 
-- Added `grid_life.py`: persistent identity, goals, commitments, relationships,
-  heartbeat, budgets, quiet hours, reflections, pending messages and an iLog,
-  stored in the existing DuckDB.
-- Added `/life` commands for status, tick, iLog, goals, commitments, pause,
-  resume and identity. Pending messages are shown when you enter Chat.
-- Added a standalone `python grid_life.py status|tick|log` CLI for when GRID
-  is closed.
-- GRID Life now adopts the `/persona` identity. `/persona set TinaGrid` makes
-  `/life` TinaGrid, adds `Moltbook as TinaGrid` to its identity, and tells
-  `/life awake` that it has a persistent social history and the full toolset.
-  With no persona, the first life action asks for a name.
-- Added 18 fixed-clock unit tests for the life loop; CI runs them.
-- Added `/life awake`: a foreground awake run that uses the real 70-tool
-  registry, shows its steps, and records the result in the iLog. All life
-  commands now live under `/life`.
-- Added `/life wake` for manual wakes that bypass quiet hours and the daily
-  action budget.
-- Added a permission policy (`ask`, `auto`, `read_only`) covering all 70 tools,
-  with session approvals and an `auto_approve` list for iLands-style automatic
-  email or other external actions.
-- Added double-Esc cancellation via a global watcher, plus cooperative cancel
-  checks between steps and immediate termination of `run_command`.
-- Added 15 more tests for permissions, cancellation and the awake runner.
-- Renamed the app and setup banners to GRID v3.
-- The open-source stack (Agent Skills, MCP, MarkItDown, evals, optional tools)
-  is the next v3 slice.
+- `/life` is autopilot: one command, one continuous loop, and Esc twice returns
+  to manual. GRID greets the user, reports each cycle, asks `ASK_USER`
+  follow-ups, and checks in every few cycles.
+- GRID Life adopts the `/persona` identity. `/persona set TinaGrid` makes
+  `/life` TinaGrid, knows `Moltbook as TinaGrid`, and gives the model the full
+  70-tool registry. With no persona, `/life` asks for one; with no goals, it
+  asks what to work on.
+- Autopilot reads recent chats, durable memory, tool logs, scan results and
+  local database counts, can inspect more with `db_query`, and redacts obvious
+  secrets. Cloud backends omit this context unless `life.allow_cloud_context`
+  is true.
+- Life state lives in DuckDB: identity, goals, commitments, relationships,
+  events, heartbeat, budgets, quiet hours, reflections, pending messages and
+  iLog.
+- Permission policy covers all 70 tools with `ask`, `auto` and `read_only`
+  modes, session approvals and `auto_approve` for external actions such as
+  automatic email.
+- Double-Esc cancellation works across streaming, tool steps and `run_command`.
+- The app, setup banner, installer, README and manual use GRID v3.
+- 34 tests cover the life loop, persona sync, permissions, cancellation,
+  autopilot and local context; CI runs them.
 
 ## v2.0.1 - clean run
 
