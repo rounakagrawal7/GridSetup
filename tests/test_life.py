@@ -66,6 +66,39 @@ class LifeEngineTests(unittest.TestCase):
         self.assertEqual(result["action"], "rest")
         self.assertEqual(result["reason"], "quiet hours")
 
+    def test_persona_is_adopted_on_startup(self):
+        life = LifeEngine(
+            self.db,
+            life_config(),
+            now_fn=lambda: self.now,
+            persona="TinaGrid",
+        )
+        self.assertEqual(life.identity()["name"], "TinaGrid")
+        self.assertIn("Moltbook as TinaGrid", life.identity_text())
+        self.assertFalse(life.needs_persona())
+
+    def test_persona_onboarding_is_asked_once(self):
+        self.assertTrue(self.life.needs_persona())
+        self.life.mark_persona_prompted()
+        self.assertFalse(self.life.needs_persona())
+
+    def test_adopt_and_clear_persona(self):
+        self.life.adopt_persona("TinaGrid")
+        self.assertEqual(self.life.identity()["name"], "TinaGrid")
+        self.life.clear_persona()
+        self.assertEqual(self.life.identity()["name"], "GRID")
+        self.assertTrue(self.life.needs_persona())
+
+    def test_manual_wake_overrides_quiet_hours(self):
+        result = self.life.tick(datetime(2026, 11, 24, 23, 30), manual=True)
+        self.assertNotEqual(result.get("reason"), "quiet hours")
+        self.assertEqual(result["action"], "reflect")
+
+    def test_manual_wake_overrides_action_budget(self):
+        self.life.cfg["max_actions_per_day"] = 0
+        result = self.life.tick(self.now, manual=True)
+        self.assertNotEqual(result.get("reason"), "daily action budget reached")
+
     def test_same_day_quiet_hours(self):
         self.life.cfg["quiet_hours"] = ["12:00", "14:00"]
         result = self.life.tick(datetime(2026, 11, 24, 13, 0))

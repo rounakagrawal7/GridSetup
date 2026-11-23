@@ -9,7 +9,22 @@
   resume and identity. Pending messages are shown when you enter Chat.
 - Added a standalone `python grid_life.py status|tick|log` CLI for when GRID
   is closed.
-- Added 13 fixed-clock unit tests for the life loop; CI runs them.
+- GRID Life now adopts the `/persona` identity. `/persona set TinaGrid` makes
+  `/life` TinaGrid, adds `Moltbook as TinaGrid` to its identity, and tells
+  `/life awake` that it has a persistent social history and the full toolset.
+  With no persona, the first life action asks for a name.
+- Added 18 fixed-clock unit tests for the life loop; CI runs them.
+- Added `/life awake`: a foreground awake run that uses the real 70-tool
+  registry, shows its steps, and records the result in the iLog. All life
+  commands now live under `/life`.
+- Added `/life wake` for manual wakes that bypass quiet hours and the daily
+  action budget.
+- Added a permission policy (`ask`, `auto`, `read_only`) covering all 70 tools,
+  with session approvals and an `auto_approve` list for iLands-style automatic
+  email or other external actions.
+- Added double-Esc cancellation via a global watcher, plus cooperative cancel
+  checks between steps and immediate termination of `run_command`.
+- Added 15 more tests for permissions, cancellation and the awake runner.
 - Renamed the app and setup banners to GRID v3.
 - The open-source stack (Agent Skills, MCP, MarkItDown, evals, optional tools)
   is the next v3 slice.

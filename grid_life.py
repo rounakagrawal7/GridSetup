@@ -72,11 +72,18 @@ def _new_id(prefix: str) -> str:
 class LifeEngine:
     """Durable life state stored in the same DuckDB as the rest of GRID."""
 
-    def __init__(self, db, config: Optional[Dict[str, Any]] = None, now_fn=None):
+    def __init__(
+        self,
+        db,
+        config: Optional[Dict[str, Any]] = None,
+        now_fn=None,
+        persona: Optional[str] = None,
+    ):
         self.db = db
         self.conn = db.conn
         self.cfg = _merge_config(config)
         self.now_fn = now_fn or datetime.now
+        self.persona = (persona or "").strip()
         self._ensure_schema()
         self._seed()
 
@@ -159,7 +166,7 @@ class LifeEngine:
                 VALUES (1, ?, ?, ?, ?, ?, ?)
                 """,
                 [
-                    str(self.cfg.get("identity_name", "GRID")),
+                    str(self.persona or self.cfg.get("identity_name", "GRID")),
                     str(self.cfg.get("voice", "")),
                     str(self.cfg.get("values", "")),
                     str(self.cfg.get("boundaries", "")),
@@ -167,6 +174,12 @@ class LifeEngine:
                     now,
                 ],
             )
+        if self.persona:
+            self.conn.execute(
+                "UPDATE life_identity SET name = ?, updated_at = ? WHERE id = 1",
+                [self.persona, self.now_fn()],
+            )
+            self.set_state("persona_prompted", "1")
         for key, value in (
             ("paused", "0"),
             ("created_at", self.now_fn().isoformat()),
@@ -225,6 +238,11 @@ class LifeEngine:
         ident = self.identity()
         if not ident:
             return "GRID Life has no identity yet."
+        social = (
+            f"Moltbook as {self.persona}"
+            if self.persona
+            else "not configured (use /persona set <name>)"
+        )
         return "\n".join(
             [
                 "GRID Life identity",
@@ -232,8 +250,51 @@ class LifeEngine:
                 f"  Voice:       {ident.get('voice')}",
                 f"  Values:      {ident.get('values')}",
                 f"  Boundaries:  {ident.get('boundaries')}",
+                f"  Social:      {social}",
             ]
         )
+
+    def needs_persona(self) -> bool:
+        if self.persona:
+            return False
+        if self.get_state("persona_prompted", "0") == "1":
+            return False
+        return (self.identity().get("name") or "GRID") in ("", "GRID")
+
+    def mark_persona_prompted(self) -> None:
+        self.set_state("persona_prompted", "1")
+
+    def adopt_persona(self, name: str, record: bool = True) -> str:
+        name = (name or "").strip()
+        if not name:
+            return "Error: persona name is required."
+        self.persona = name
+        now = self.now_fn()
+        self.conn.execute(
+            "UPDATE life_identity SET name = ?, updated_at = ? WHERE id = 1",
+            [name, now],
+        )
+        self.set_state("persona_prompted", "1")
+        if record:
+            self._event("identity", f"Persona adopted: {name}", "", now=now)
+        return f"GRID Life is now {name}."
+
+    def clear_persona(self) -> str:
+        old = self.persona
+        self.persona = ""
+        now = self.now_fn()
+        self.conn.execute(
+            "UPDATE life_identity SET name = 'GRID', updated_at = ? WHERE id = 1",
+            [now],
+        )
+        self.set_state("persona_prompted", "0")
+        self._event(
+            "identity",
+            f"Persona cleared: {old}" if old else "Persona cleared",
+            "",
+            now=now,
+        )
+        return "GRID Life persona cleared. It will ask on the next wake."
 
     # -- events / iLog ---------------------------------------------------
 
@@ -271,6 +332,17 @@ class LifeEngine:
             "detail": detail,
             "created_at": now,
         }
+
+    def record_event(
+        self,
+        kind: str,
+        summary: str,
+        detail: str = "",
+        goal_id: str = "",
+        now: Optional[datetime] = None,
+    ) -> Dict[str, Any]:
+        """Public event writer for the awake runner and future tray."""
+        return self._event(kind, summary, detail, goal_id, now)
 
     def log_text(self, limit: int = 20) -> str:
         rows = self.conn.execute(
@@ -378,6 +450,28 @@ class LifeEngine:
             "created_by", "approved", "created_at", "last_worked_at",
         ]
         return [dict(zip(keys, row)) for row in rows]
+
+    def focus_goal(self) -> Optional[Dict[str, Any]]:
+        goals = self.list_goals("active")
+        return goals[0] if goals else None
+
+    def record_work(
+        self,
+        summary: str,
+        detail: str = "",
+        goal_id: str = "",
+        now: Optional[datetime] = None,
+    ) -> Dict[str, Any]:
+        now = now or self.now_fn()
+        if goal_id:
+            self.conn.execute(
+                """
+                UPDATE life_goals SET last_worked_at = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                [now, now, goal_id],
+            )
+        return self._event("work", summary, detail, goal_id, now)
 
     def goals_text(self, status: Optional[str] = "active") -> str:
         goals = self.list_goals(status)
@@ -653,17 +747,17 @@ class LifeEngine:
             f"{goals} active goal(s), {commitments} open commitment(s)."
         )
 
-    def _tick(self, now: datetime) -> Dict[str, Any]:
+    def _tick(self, now: datetime, manual: bool = False) -> Dict[str, Any]:
         if not self.cfg.get("enabled", True):
             return self._rest(now, "life disabled")
         if self.is_paused():
             return self._rest(now, "paused")
-        if _in_quiet_hours(now, self.cfg.get("quiet_hours")):
+        if not manual and _in_quiet_hours(now, self.cfg.get("quiet_hours")):
             return self._rest(now, "quiet hours")
 
         max_actions = int(self.cfg.get("max_actions_per_day", 12))
         max_messages = int(self.cfg.get("max_messages_per_day", 6))
-        if self._actions_today(now) >= max_actions:
+        if not manual and self._actions_today(now) >= max_actions:
             return self._rest(now, "daily action budget reached")
 
         can_message = self._messages_today(now) < max_messages
@@ -728,9 +822,15 @@ class LifeEngine:
 
         return self._rest(now, "nothing due")
 
-    def tick(self, now: Optional[datetime] = None) -> Dict[str, Any]:
+    def tick(self, now: Optional[datetime] = None, manual: bool = False) -> Dict[str, Any]:
+        """Run one heartbeat.
+
+        Scheduled heartbeats call this with manual=False and respect quiet hours
+        and budgets. A user-invoked wake calls it with manual=True, so GRID can
+        always be woken on demand.
+        """
         now = now or self.now_fn()
-        result = self._tick(now)
+        result = self._tick(now, manual=manual)
         self.set_state("last_tick", now.isoformat())
         return result
 
@@ -793,7 +893,7 @@ def _load_config() -> Dict[str, Any]:
 
 
 def _print_tick(life: LifeEngine) -> None:
-    result = life.tick()
+    result = life.tick(manual=True)
     print(result.get("summary", "Tick complete."))
     if result.get("detail"):
         print(result["detail"])

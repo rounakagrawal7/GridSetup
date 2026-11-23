@@ -152,7 +152,10 @@ GRID v3 adds a persistent local life layer: identity, goals, commitments, a hear
 | Command | Action |
 |---|---|
 | `/life` | Status, budget, next wake, pending messages |
-| `/life tick` | Run one heartbeat now |
+| `/life help` | List every life subcommand |
+| `/life awake [task]` | Use the real tools now (Esc twice to stop) |
+| `/life wake` | Wake now, bypassing quiet hours and the action budget |
+| `/life tick` | Run one heartbeat now (manual) |
 | `/life log [n]` | Show the iLog |
 | `/life goals` | List active goals |
 | `/life goal add <title>` | Add a goal |
@@ -164,6 +167,59 @@ GRID v3 adds a persistent local life layer: identity, goals, commitments, a hear
 | `/life identity` | Show the persistent identity |
 
 Defaults live in `config.json` under `life`: 30-minute heartbeat, quiet hours 22:00–08:00, a 09:00 brief, and daily budgets of 12 actions and 6 messages. The standalone `python grid_life.py status|tick|log` works when GRID is closed.
+
+`/life wake` and `/life tick` are **manual wakes**: they bypass quiet hours and the daily action budget, so you can always wake GRID on demand. An explicit `/life pause` still wins until `/life resume`.
+
+GRID Life uses the same identity as `/persona`. If you set `/persona set TinaGrid`, then:
+- `/life identity` shows `TinaGrid` and `Moltbook as TinaGrid`;
+- `/life awake` tells the model it is TinaGrid, has a persistent Moltbook history, and has the full 70-tool registry;
+- `/persona clear` resets the life identity to `GRID` and asks again on the next wake.
+
+If no persona is set, the first `/life awake`, `/life wake`, `/life tick`, goal or commitment command asks for a name before acting. `status`, `help`, `identity` and `log` remain available.
+
+### Awake mode
+
+`/life awake` starts a foreground awake run that can use the real 70-tool registry:
+
+```text
+/life awake                      work on the top active goal
+/life awake Map my home network  work on an ad-hoc task
+```
+
+- GRID prints the goal, its thinking state, each tool step, and the final result.
+- **Press Esc twice** during a run to stop it. `Ctrl+C` also stops it.
+- `run_command` is terminated immediately on cancel. Blocking network/hardware calls finish or hit their timeout, then the run stops.
+- Every tool goes through the permission policy before it runs.
+
+### Permissions and auto-email
+
+Autonomous runs use `permissions` in `config.json`:
+
+```json
+"permissions": {
+  "mode": "ask",
+  "auto_approve": [],
+  "deny": []
+}
+```
+
+| Mode | Behaviour |
+|---|---|
+| `ask` | Read-only tools run; sensitive, local-write, external, hardware and dangerous tools ask first |
+| `auto` | Read-only, local-write, external and hardware tools run; sensitive and dangerous tools still ask |
+| `read_only` | Only read-only tools run |
+
+For iLands-style automatic email, keep `ask` and opt in only the tools you trust:
+
+```json
+"permissions": {
+  "mode": "ask",
+  "auto_approve": ["email_send"],
+  "deny": []
+}
+```
+
+The `email` section must already have working SMTP settings. With `mode: "auto"`, external actions such as `email_send`, `telegram_send` and `social` run without a prompt; destructive actions still ask. When a prompt appears, `a` means “always this session”; `n` denies. The default is deny.
 
 
 > 📘 After first launch, open **`GRID_Tools_Test_Guide.docx`** for the full command reference.
@@ -184,6 +240,8 @@ Defaults live in `config.json` under `life`: 30-minute heartbeat, quiet hours 22
 | `grid_micro.py` | Microcontroller IoT (ESP32, Arduino, LoRa) |
 | `grid_skills.py` | Self-authored reusable skills |
 | `grid_life.py` | Persistent identity, goals, commitments, heartbeat and iLog |
+| `grid_awake.py` | Foreground awake runs, step display and double-Esc cancel |
+| `grid_permissions.py` | Ask/auto/read-only policy for autonomous tool use |
 | `grid_agent_social.py` | Moltbook social agent platform |
 | `grid_google.py` / `grid_sheets.py` | Google Calendar & Sheets / Excel |
 | `install.py` | One-time setup — deps, models, config |

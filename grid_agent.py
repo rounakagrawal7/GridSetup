@@ -336,6 +336,8 @@ class LLMBackend:
                         stream=True,
                     )
                     for chunk in stream:
+                        if Tools.cancel_token is not None and Tools.cancel_token.is_set():
+                            break
                         delta = chunk.choices[0].delta.content or ""
                         if delta:
                             result_container["data"] += delta
@@ -346,6 +348,8 @@ class LLMBackend:
                         stream=True,
                     )
                     for part in stream:
+                        if Tools.cancel_token is not None and Tools.cancel_token.is_set():
+                            break
                         delta = part.get("message", {}).get("content", "")
                         if delta:
                             result_container["data"] += delta
@@ -778,6 +782,8 @@ class Tools:
     recaller = None
     skills = None
     life = None
+    cancel_token = None
+    policy = None
     _last_tool: str | None = None
     _last_input: str = ""
 
@@ -790,8 +796,17 @@ class Tools:
 
     @staticmethod
     def safe_execute(tool_name: str, tool_input: str) -> str:
+        if Tools.cancel_token is not None and Tools.cancel_token.is_set():
+            return "Cancelled by user."
+        if Tools.policy is not None:
+            allowed, reason = Tools.policy.allow(tool_name, tool_input)
+            if not allowed:
+                return f"[Blocked] {tool_name}: {reason}"
         try:
-            return Tools.execute(tool_name, tool_input)
+            result = Tools.execute(tool_name, tool_input)
+            if Tools.cancel_token is not None and Tools.cancel_token.is_set():
+                return f"{result}\n[Cancelled by user after this step.]"
+            return result
         except ImportError as e:
             pkg = str(e).split("'")[1] if "'" in str(e) else ""
             if pkg and pkg not in ("os", "sys", "json", "re", "time", "datetime", "subprocess", "shutil", "socket", "shlex", "pathlib"):
@@ -805,6 +820,25 @@ class Tools:
     # ── existing tools ───────────────────────────────────────
 
     @staticmethod
+    def _terminate_process(proc) -> None:
+        if proc is None:
+            return
+        try:
+            if os.name == "nt":
+                subprocess.run(
+                    ["taskkill", "/T", "/F", "/PID", str(proc.pid)],
+                    capture_output=True,
+                    timeout=5,
+                )
+            else:
+                proc.terminate()
+        except Exception:
+            try:
+                proc.kill()
+            except Exception:
+                pass
+
+    @staticmethod
     def _run_command(command: str) -> str:
         if os.name == 'nt':
             cmd = command.strip().lower()
@@ -812,15 +846,33 @@ class Tools:
                 command = 'date /t & time /t'
             elif cmd == 'time':
                 command = 'time /t'
+        proc = None
         try:
-            result = subprocess.run(command, shell=True, capture_output=True, text=True, timeout=30)
-            if result.returncode == 0:
-                out = result.stdout.strip()
+            proc = subprocess.Popen(
+                command,
+                shell=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            deadline = time.time() + 30
+            while True:
+                if Tools.cancel_token is not None and Tools.cancel_token.is_set():
+                    Tools._terminate_process(proc)
+                    return "Command cancelled by user."
+                try:
+                    out, err = proc.communicate(timeout=0.2)
+                    break
+                except subprocess.TimeoutExpired:
+                    if time.time() >= deadline:
+                        Tools._terminate_process(proc)
+                        return "Command timed out (30s)."
+            if proc.returncode == 0:
+                out = (out or "").strip()
                 return out if out else "(no output)"
-            return f"Exit code {result.returncode}:\n{result.stderr.strip()}"
-        except subprocess.TimeoutExpired:
-            return "Command timed out (30s)."
+            return f"Exit code {proc.returncode}:\n{(err or '').strip()}"
         except Exception as e:
+            Tools._terminate_process(proc)
             return f"Error: {e}"
 
     @staticmethod
@@ -4175,6 +4227,8 @@ class GridOrchestrator:
         # If no auto-detect, use LLM with multi-turn chain
         tool_chain = []
         for turn in range(MAX_TOOL_TURNS + 1):
+            if Tools.cancel_token is not None and Tools.cancel_token.is_set():
+                return "[Cancelled by user]"
             for attempt in range(2):
                 if stream and turn == 0 and attempt == 0:
                     collected = ""
@@ -4184,6 +4238,8 @@ class GridOrchestrator:
                 else:
                     llm_response = self.backend.chat(messages, temperature=0.1)
 
+                if Tools.cancel_token is not None and Tools.cancel_token.is_set():
+                    return "[Cancelled by user]"
                 if llm_response and llm_response.strip():
                     break
                 if attempt == 0:
@@ -4206,6 +4262,8 @@ class GridOrchestrator:
             else:
                 console.print(Panel(step_info, border_style=M, padding=(0, 1)))
             result = Tools.safe_execute(tool_name, tool_input)
+            if Tools.cancel_token is not None and Tools.cancel_token.is_set():
+                return f"[Cancelled by user]\n{result[:1000]}"
 
             tool_chain.append((tool_name, tool_input, result))
             messages.append({"role": "assistant", "content": llm_response})
@@ -4652,8 +4710,8 @@ SLASH_SUBCOMMANDS = {
     "/gcal": ["setup", "calendars", "events", "create", "search"],
     "/gsheet": ["list", "read", "new", "stats", "plot"],
     "/jobs": ["list", "new", "show", "edit", "toggle", "delete"],
-    "/life": ["status", "tick", "log", "goals", "goal", "commitments",
-              "commitment", "pause", "resume", "identity"],
+    "/life": ["status", "help", "awake", "wake", "tick", "log", "goals", "goal",
+              "commitments", "commitment", "pause", "resume", "identity"],
     "/memory": ["status", "clear"],
     "/pb": ["start", "stop", "install", "sync"],
     "/persona": ["set", "clear"],
@@ -5213,7 +5271,12 @@ def main(argv=None):
         atexit.register(lambda: Tools.db and Tools.db.close())
         try:
             from grid_life import LifeEngine
-            Tools.life = LifeEngine(Tools.db, (load_config().get("life") or {}))
+            life_cfg = load_config()
+            Tools.life = LifeEngine(
+                Tools.db,
+                (life_cfg.get("life") or {}),
+                persona=(life_cfg.get("grid_persona") or ""),
+            )
         except Exception as e:
             console.print(f"  [{M_DIM}][!] GRID Life unavailable: {e}[/]")
     else:
@@ -5597,11 +5660,17 @@ f"16 capability groups: [bold]Computer Use[/] | [bold]Files[/] | [bold]Shell[/] 
                         continue
 
                     if cmd == "/persona" or cmd.startswith("/persona "):
-                        parts = cmd.split(maxsplit=1)
+                        parts = user_input.strip().split(maxsplit=1)
                         sub = parts[1].strip() if len(parts) > 1 else ""
                         from grid_agent_social import moltbook_social
                         result = moltbook_social(f"persona {sub}".strip())
                         console.print(f"  [{M}]{result}[/]\n")
+                        if Tools.life is not None:
+                            sub_l = sub.lower()
+                            if sub_l.startswith("set ") and "error:" not in result.lower():
+                                Tools.life.adopt_persona(sub[4:].strip())
+                            elif sub_l == "clear":
+                                Tools.life.clear_persona()
                         continue
 
                     if cmd == "/life" or cmd.startswith("/life "):
@@ -5611,11 +5680,58 @@ f"16 capability groups: [bold]Computer Use[/] | [bold]Files[/] | [bold]Shell[/] 
                         parts = user_input.strip().split(maxsplit=2)
                         sub = parts[1].lower() if len(parts) > 1 else "status"
                         arg = parts[2].strip() if len(parts) > 2 else ""
+                        if Tools.life.needs_persona() and sub not in (
+                            "help", "status", "show", "identity", "log"
+                        ):
+                            console.print(
+                                f"  [{M}]GRID Life needs a persona before it can act.[/]\n"
+                                f"  [{M_DIM}]This is the same identity used by /persona and Moltbook.[/]"
+                            )
+                            name = Prompt.ask(f"  [{M}]Persona name[/]", default="").strip()
+                            if name:
+                                from grid_agent_social import moltbook_social
+                                result = moltbook_social(f"persona set {name}")
+                                Tools.life.adopt_persona(name)
+                                console.print(f"  [{M}]{result}[/]\n")
+                            else:
+                                Tools.life.mark_persona_prompted()
+                                console.print(
+                                    f"  [{M_DIM}]Using GRID without a social persona. "
+                                    f"Set one with /persona set <name>.[/]\n"
+                                )
                         try:
                             if sub in ("status", "show"):
                                 console.print(f"  [{M}]{Tools.life.status_text()}[/]\n")
-                            elif sub == "tick":
-                                result = Tools.life.tick()
+                            elif sub == "help":
+                                console.print(f"""  [{M}]GRID Life commands[/]
+  /life                     status
+  /life awake [task]        use tools now (Esc twice to stop)
+  /life wake                wake now; bypass quiet hours/budget
+  /life tick                run one heartbeat
+  /life log [n]             show the iLog
+  /life goals               list active goals
+  /life goal add <title>    add a goal
+  /life goal done <id>      complete a goal
+  /life commitments         list open commitments
+  /life commitment add <text>
+  /life commitment done <id>
+  /life pause | resume
+  /life identity
+""")
+                            elif sub == "awake":
+                                focus = arg.strip()
+                                from grid_awake import AwakeRunner
+                                runner = AwakeRunner(
+                                    Tools.life,
+                                    orchestrator,
+                                    console,
+                                    permissions=(load_config().get("permissions") or {}),
+                                )
+                                message = runner.run(focus or None)
+                                if message.startswith("No active goals"):
+                                    console.print(f"  [{M_DIM}]{message}[/]\n")
+                            elif sub in ("tick", "wake"):
+                                result = Tools.life.tick(manual=True)
                                 body = result.get("summary", "Tick complete.")
                                 if result.get("detail"):
                                     body += "\n" + result["detail"]
@@ -5664,7 +5780,7 @@ f"16 capability groups: [bold]Computer Use[/] | [bold]Files[/] | [bold]Shell[/] 
                             elif sub == "identity":
                                 console.print(f"  [{M}]{Tools.life.identity_text()}[/]\n")
                             else:
-                                console.print(f"  [{M_DIM}]Usage: /life [status|tick|log|goals|goal|commitments|commitment|pause|resume|identity][/]\n")
+                                console.print(f"  [{M_DIM}]Usage: /life [status|help|awake|wake|tick|log|goals|goal|commitments|commitment|pause|resume|identity][/]\n")
                         except Exception as e:
                             console.print(f"  [red]GRID Life error: {e}[/]\n")
                         continue

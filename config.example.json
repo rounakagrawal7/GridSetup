@@ -15,6 +15,11 @@
     "reflection_hours": 24,
     "commitment_repeat_hours": 6
   },
+  "permissions": {
+    "mode": "ask",
+    "auto_approve": [],
+    "deny": []
+  },
   "email": {
     "smtp_server": "",
     "smtp_port": 587,

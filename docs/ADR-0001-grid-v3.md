@@ -37,8 +37,17 @@ The life loop must be able to do nothing. "Rest" is a first-class action.
 
 - The model proposes; code decides permissions, budgets, quiet hours, dates
   and approvals.
-- External writes, shell, delete, send and hardware actions require explicit
-  confirmation.
+- Every tool is classified by risk. Autonomous runs use `ask`, `auto` or
+  `read_only`; external writes, shell, delete, send and hardware actions
+  require confirmation unless the user explicitly auto-approves them.
+- A manual `/life wake` or `/life awake` bypasses quiet hours and the daily
+  action budget, but never an explicit `/life pause`.
+- GRID Life uses the same persona as `/persona`. The persona is the social
+  identity (for example Moltbook as TinaGrid), and the awake prompt includes
+  that identity, its social presence and the full toolset. If no persona is
+  set, the first life action asks for one.
+- A double-Esc token stops the awake run between steps; `run_command` is
+  terminated immediately. Blocking network calls finish or time out.
 - No continuous screen recording, microphone capture or clipboard capture in
   the first release.
 - Observed content (web, files, messages) is untrusted and cannot inject tool
@@ -56,8 +65,10 @@ The life loop must be able to do nothing. "Rest" is a first-class action.
 
 ## Delivery slices
 
-1. Life engine + `/life` + tests (this slice).
-2. Agent Skills loader.
+1. Life engine + `/life` + tests (landed).
+2. Foreground `/life awake` runner, permission policy and double-Esc cancel
+   (landed).
+3. Agent Skills loader.
 3. Eval harness.
 4. MCP client, then GRID MCP server.
 5. MarkItDown document tool.
