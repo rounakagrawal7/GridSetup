@@ -40,6 +40,9 @@ from grid_satellite import satellite_main
 from grid_micro import micro_main
 from grid_ctf import ctf_main as ctf_tool
 from grid_game import game_main as game_tool
+from grid_docs import document_read as document_read_tool
+from grid_context import compress_messages
+from grid_optional import nuclei_scan, pio_build, sherlock_scan
 from rich.text import Text
 from rich import box
 
@@ -201,6 +204,10 @@ def ensure_deps(install_missing: bool = False):
         ("minigrid", "minigrid", "MiniGrid benchmark navigation environments"),
         ("miniupnpc", "miniupnpc", "UPnP port forwarding"),
         ("upnpclient", "upnpclient", "UPnP client for port forwarding"),
+        ("markitdown", "markitdown[pdf,docx,xlsx,pptx]", "Document reading (PDF/DOCX/XLSX/PPTX)"),
+        ("headroom", "headroom-ai", "Context compression (Headroom)"),
+        ("platformio", "platformio", "Microcontroller build/upload"),
+        ("pystray", "pystray", "System tray host"),
     ]
 
     missing = []
@@ -277,6 +284,9 @@ class LLMBackend:
         self.type = backend_type
         self.model = model
         self.base_url = base_url.rstrip("/")
+        self.compress_context = bool(
+            (load_config().get("life") or {}).get("compress_context", False)
+        )
         self._init_client()
 
     def _init_client(self):
@@ -310,6 +320,7 @@ class LLMBackend:
                 self._client = _ollama
 
     def chat(self, messages: List[Dict], temperature: float = 0.7) -> str:
+        messages = compress_messages(messages, self.model, self.compress_context)
         try:
             if self.type in ("lm_studio", "openrouter"):
                 resp = self._client.chat.completions.create(
@@ -326,6 +337,7 @@ class LLMBackend:
 
     def chat_stream(self, messages: List[Dict], temperature: float = 0.7):
         import threading
+        messages = compress_messages(messages, self.model, self.compress_context)
         result_container = {"done": False, "data": "", "error": ""}
 
         def _run():
@@ -782,6 +794,7 @@ class Tools:
     recaller = None
     skills = None
     skilldocs = None
+    mcp = None
     life = None
     cancel_token = None
     policy = None
@@ -3622,6 +3635,32 @@ Comment Data:
         return Tools.skilldocs.read_text(spec)
 
     @staticmethod
+    def _mcp_servers(_unused: str = "") -> str:
+        if not Tools.mcp:
+            return "MCP manager is not initialized."
+        return Tools.mcp.list_servers_text()
+
+    @staticmethod
+    def _mcp_tools(server: str) -> str:
+        if not Tools.mcp:
+            return "MCP manager is not initialized."
+        try:
+            return Tools.mcp.list_tools_text(server.strip())
+        except Exception as e:
+            return f"Error: {e}"
+
+    @staticmethod
+    def _mcp_call(spec: str) -> str:
+        if not Tools.mcp:
+            return "MCP manager is not initialized."
+        parts = (spec or "").strip().split(maxsplit=2)
+        if len(parts) < 2:
+            return "Usage: mcp_call <server> <tool> [json-arguments]"
+        server, tool_name = parts[0], parts[1]
+        arguments = parts[2] if len(parts) > 2 else ""
+        return Tools.mcp.call_text(server, tool_name, arguments)
+
+    @staticmethod
     def _build_schema() -> str:
         lines = [
             "You have access to these tools. If the user's request requires one, "
@@ -3795,6 +3834,7 @@ Tools._reg("create_directory", Tools._create_directory, "Create one or more dire
 Tools._reg("delete_file",      Tools._delete_file,      "Delete a file", "full file path")
 Tools._reg("write_file",       Tools._write_file,       "Write or overwrite a file (text, code, etc.)", "first line = path, then ---, then content")
 Tools._reg("read_file",        Tools._read_file,        "Read the contents of a file", "full file path")
+Tools._reg("document_read",    document_read_tool,      "Convert a local PDF, DOCX, XLSX, PPTX, HTML, CSV, JSON or text document to Markdown/text for analysis.", "local file path")
 Tools._reg("list_directory",   Tools._list_directory,   "List files and folders in a directory", "directory path (use . for current)")
 Tools._reg("get_cwd",          Tools._get_cwd,          "Show the current working directory", "(ignored)")
 Tools._reg("web_fetch",        Tools._web_fetch,        "Fetch a web page and return its text content", "full URL to fetch")
@@ -3855,6 +3895,12 @@ Tools._reg("list_skills",        Tools._list_skills,      "List all user-created
 Tools._reg("skill_search",       Tools._skill_search,     "Search procedural SKILL.md skills by name or description. Use before a specialized workflow.", "query text")
 Tools._reg("skill_load",         Tools._skill_load,       "Load a SKILL.md procedure by name. Returns its instructions and metadata.", "skill name")
 Tools._reg("skill_read",         Tools._skill_read,       "Read a reference or script inside a SKILL.md skill. Input: skill-name/relative/path.", "skill-name/references/file.md")
+Tools._reg("mcp_servers",        Tools._mcp_servers,      "List configured Model Context Protocol servers and their status.", "(ignored)")
+Tools._reg("mcp_tools",          Tools._mcp_tools,        "List tools exposed by a configured MCP server. Input: server name.", "server name")
+Tools._reg("mcp_call",           Tools._mcp_call,         "Call a tool on a configured MCP server. Input: server tool [json-arguments].", "server tool {\"key\": \"value\"}")
+Tools._reg("sherlock_scan",     sherlock_scan,           "Search 400+ social networks for a username with Sherlock (optional binary).", "username")
+Tools._reg("nuclei_scan",       nuclei_scan,             "Run a Nuclei template scan on an authorized target (optional binary). Input must start with 'authorized'.", "authorized <url-or-host>")
+Tools._reg("pio_build",         pio_build,               "Build/upload an ESP32/Arduino project with PlatformIO (optional binary).", "project directory")
 Tools._reg("social",             moltbook_social,         "Moltbook social platform: persona, register, profile, post, reply, feed, search, vote, submolts, follow, agents, switch, auto, auto-daemon, writeup, history. All actions auto-logged. Use 'social help' for full reference.", "'social persona set MyName' or 'social auto' or 'social history' or 'social feed hot 10' or 'social writeup'")
 Tools._reg("gcal",               google_calendar,         "Google Calendar integration. Sub-commands: setup, calendars, events, event, create, update, delete, search. Use 'gcal help' for full reference.", "'gcal events' or 'gcal create primary | Meeting | 2026-07-29T14:00:00 | 2026-07-29T15:00:00'")
 Tools._reg("gsheet",             google_sheets,          "Google Sheets + Excel + data analytics. Sub-commands: list, read, create, write, append (Google Sheets); open, new, edit, addrow (local .xlsx); stats, analyze, plot (analytics). Use 'gsheet help' for full reference.", "'gsheet list' or 'gsheet stats data.xlsx' or 'gsheet open budget.xlsx'")
@@ -4037,6 +4083,13 @@ class GridOrchestrator:
             except Exception:
                 pass
 
+        if getattr(Tools, "mcp", None) and Tools.mcp.names():
+            base_prompt += (
+                "\n=== MCP SERVERS ===\n"
+                "Use mcp_servers to list them, mcp_tools <server> to list tools, "
+                "and mcp_call <server> <tool> <json> to call one.\n\n"
+            )
+
         messages = [{"role": "system", "content": base_prompt + Tools.SCHEMA}]
         if self.recaller is not None:
             try:
@@ -4054,12 +4107,19 @@ class GridOrchestrator:
         orig = user_input.strip()
         inp = orig.lower()
 
-        # Direct hit: exact tool name mentioned at start
-        for tool_name in Tools.registry:
-            if inp.startswith(tool_name) or inp.startswith(tool_name.replace("_", " ")):
-                rest = orig[len(tool_name):].strip().lstrip(":").strip()
-                rest = rest.replace("to ", "", 1).strip()
-                return (tool_name, rest)
+        # Direct hit: exact tool name mentioned at start. Prefer the longest
+        # match so "screenshot ocr" wins over "screenshot".
+        matches = [
+            name for name in Tools.registry
+            if inp.startswith(name) or inp.startswith(name.replace("_", " "))
+        ]
+        if matches:
+            tool_name = max(matches, key=len)
+            rest = orig[len(tool_name):].strip().lstrip(":").strip()
+            rest = rest.replace("to ", "", 1).strip()
+            if tool_name == "weather":
+                rest = re.sub(r"^(?:in|for|at)\s+", "", rest, flags=re.I)
+            return (tool_name, rest)
 
         # Map common phrases to tools
         phrases = [
@@ -4080,7 +4140,10 @@ class GridOrchestrator:
             (r"(?:open|launch|start)\s+(.+)", "run_command", lambda m: f"start {m.group(1)}"),
             (r"(?:show|list)\s+(?:all\s+)?process(?:es)?", "process_manager", "list"),
             (r"(?:what is|what's|tell me|show me|get|show)\s+(?:my\s+)?system\s+(?:info|information|specs?)", "system_info", ""),
+            (r"(?:what is|what's|get|show)\s+my\s+(?:ip|ip address|local ip)", "system_info", ""),
+            (r"(?:take|get)?\s*screenshot\s+ocr|(?:ocr|read text)\s+(?:from\s+)?(?:screenshot|screen)", "screenshot_ocr", ""),
             (r"(?:take|get)\s+a?\s*screenshot", "screenshot", ""),
+            (r"weather\s+(?:in|for|at)\s+(.+)", "weather", "{0}"),
             (r"(?:what is|what's|get|show)\s+(?:the )?weather\s+(?:in |for |at )?(.+)", "weather", "{0}"),
             (r"(?:search|google|look up)\s+(?:the web|the internet|web)?\s*(.+)", "web_search",
              lambda m: re.sub(r"^(?:online\s+)?(?:about|for|on)\s+", "", m.group(1).strip(), flags=re.I)),
@@ -4105,6 +4168,7 @@ class GridOrchestrator:
             (r"nc_scan\s+(.+)", "nc_scan", "{0}"),
             (r"(?:nc scan|portscan|quick scan)\s+(\S+)(?:\s+(\S+))?", "nc_scan", lambda m: f"{m.group(1)} {m.group(2) or '1-1024'}"),
             (r"nc_banner_grab\s+(.+)", "nc_banner_grab", "{0}"),
+            (r"banner\s+grab\s+(\S+)\s+(\d+)", "nc_banner_grab", "{0} {1}"),
             (r"(?:grab|get)\s+banner\s+(?:from\s+)?(\S+)\s+(\d+)", "nc_banner_grab", "{0} {1}"),
             (r"nc_transfer\s+(.+)", "nc_transfer", "{0}"),
             (r"(?:send|transfer)\s+file\s+(\S+)\s+to\s+(\S+)\s+(\d+)", "nc_transfer", lambda m: f"send {m.group(1)} {m.group(2)} {m.group(3)}"),
@@ -4120,6 +4184,7 @@ class GridOrchestrator:
             (r"(?:start|begin)\s+(?:a\s+)?(?:netcat|nc)\s+(?:session|chat)", "nc_chat", "9999"),
             (r"comms(?:\s+help|\s+-h|\s+--help|\s*\?)?$", "comms", "help"),
             (r"telegram_send\s+(.+)", "telegram_send", "{0}"),
+            (r"send\s+telegram\s+(.+)", "telegram_send", "{0}"),
             (r"(?:send|msg|message)\s+via\s+telegram\s+(.+)", "telegram_send", "{0}"),
             (r"telegram_status", "telegram_status", ""),
             (r"(?:telegram|tg)\s+status", "telegram_status", ""),
@@ -4156,6 +4221,10 @@ class GridOrchestrator:
             (r"(?:live\s+)?flights?\s+(?:near|around|in|at)\s+(.+)" , "osint", lambda m: f"flight_tracker {m.group(1)}"),
             (r"flight_tracker\s+(.+)", "osint", lambda m: f"flight_tracker {m.group(1)}"),
             (r"flight\s+(\w+\s*\w*)", "osint", lambda m: f"flight {m.group(1)}"),
+            (r"whois\s+(\S+)", "osint", "{0}"),
+            (r"sherlock\s+(\S+)", "sherlock_scan", "{0}"),
+            (r"nuclei\s+(?:scan\s+)?(.+)", "nuclei_scan", "{0}"),
+            (r"pio\s+build\s+(.+)", "pio_build", "{0}"),
             # Radio — specific patterns before generic
             (r"(?:KiwiSDR|kiwi|sdr)\s+(?:in|from|at|near|by)\s+(.+)", "radio", lambda m: f"kiwi bycountry {m.group(1)}"),
             (r"(?:stream)\s+(?:KiwiSDR|kiwi|sdr)\s+(\S+)\s+(\d+\.?\d*)", "radio", lambda m: f"kiwi stream {m.group(1)} {m.group(2)}"),
@@ -5003,6 +5072,32 @@ def run_checks(args) -> int:
     except Exception as e:
         add("SKILL.md skills", False, str(e), required=False)
 
+    try:
+        import markitdown  # noqa: F401
+        add("MarkItDown (optional)", True, "document reading")
+    except Exception:
+        add("MarkItDown (optional)", False, "optional; run --install-missing", required=False)
+
+    try:
+        import headroom  # noqa: F401
+        add("Headroom (optional)", True, "context compression")
+    except Exception:
+        add("Headroom (optional)", False, "optional; run --install-missing", required=False)
+
+    for binary, label in (
+        ("sherlock", "Sherlock"),
+        ("nuclei", "Nuclei"),
+        ("pio", "PlatformIO"),
+    ):
+        path = shutil.which(binary)
+        add(f"{label} (optional)", bool(path), path or "not installed", required=False)
+
+    try:
+        import pystray  # noqa: F401
+        add("pystray (optional)", True, "tray host")
+    except Exception:
+        add("pystray (optional)", False, "optional; run --install-missing", required=False)
+
     add("backend package", HAS_OLLAMA if backend_type == "ollama" else HAS_OPENAI, backend_type)
     add("config: model", bool(model), model or "(missing)")
     add("config: base_url", bool(base_url), base_url or "(missing)")
@@ -5075,6 +5170,13 @@ def main(argv=None):
     parser.add_argument("--no-input", action="store_true", help="use config.json; do not prompt for backend or model")
     parser.add_argument("--no-banner", action="store_true", help="skip the Matrix banner")
     parser.add_argument("--install-missing", action="store_true", help="install missing optional packages")
+    parser.add_argument(
+        "--autopilot",
+        nargs="?",
+        const="",
+        default=None,
+        help="start autopilot immediately, optionally on a task",
+    )
     args = parser.parse_args(argv)
 
     if args.check:
@@ -5343,6 +5445,50 @@ def main(argv=None):
         Tools.skilldocs = SkillDocManager()
     except Exception as e:
         console.print(f"  [{M_DIM}][!] SKILL.md skills unavailable: {e}[/]")
+    try:
+        from grid_mcp import MCPManager
+        Tools.mcp = MCPManager(load_config().get("mcp_servers") or {})
+        atexit.register(Tools.mcp.close_all)
+    except Exception as e:
+        console.print(f"  [{M_DIM}][!] MCP unavailable: {e}[/]")
+
+    if args.autopilot is not None:
+        if Tools.life is None:
+            console.print(f"  [{M_DIM}]GRID Life needs DuckDB. Run: pip install duckdb[/]")
+            return
+        focus = args.autopilot.strip() or None
+        if Tools.life.needs_persona():
+            console.print(
+                f"  [{M}]GRID Life needs a persona before it can act.[/]\n"
+                f"  [{M_DIM}]This is the same identity used by /persona and Moltbook.[/]"
+            )
+            name = Prompt.ask(f"  [{M}]Persona name[/]", default="").strip()
+            if name:
+                from grid_agent_social import moltbook_social
+                result = moltbook_social(f"persona set {name}")
+                Tools.life.adopt_persona(name)
+                console.print(f"  [{M}]{result}[/]")
+            else:
+                Tools.life.mark_persona_prompted()
+        if not focus and not Tools.life.focus_goal():
+            focus = Prompt.ask(
+                f"  [{M}]What should GRID work on?[/]",
+                default="Review my agenda and prepare a useful brief",
+            ).strip()
+        try:
+            from grid_awake import AutopilotRunner
+            runner = AutopilotRunner(
+                Tools.life,
+                orchestrator,
+                console,
+                permissions=(load_config().get("permissions") or {}),
+            )
+            message = runner.run(focus)
+            if message.startswith("No active goals"):
+                console.print(f"  [{M_DIM}]{message}[/]")
+        except Exception as e:
+            console.print(f"  [red]Autopilot error: {e}[/]")
+        return
 
     pb = PocketBaseManager()
     started = pb.start()

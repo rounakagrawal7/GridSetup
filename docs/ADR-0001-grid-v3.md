@@ -65,7 +65,7 @@ The life loop must be able to do nothing. "Rest" is a first-class action.
 - A second database or a hidden memory store.
 - Unbounded background loops.
 - Screen/microphone awareness in the first release.
-- Replacing the existing 73 tools with a new agent framework.
+- Replacing the existing 80 tools with a new agent framework.
 
 ## Delivery slices
 
@@ -74,11 +74,12 @@ The life loop must be able to do nothing. "Rest" is a first-class action.
    context and double-Esc cancel (landed).
 3. Agent Skills loader (landed): `SKILL.md` validation, four built-in skills,
    `skill_search`, `skill_load`, `skill_read`.
-4. Eval harness.
-5. MCP client, then GRID MCP server.
-6. MarkItDown document tool.
-7. Tray/autostart host and heartbeat.
-8. Optional tools: Sherlock, Nuclei, PlatformIO.
+4. Eval harness (landed): 49 deterministic routing cases in `evals/`.
+5. MCP client and read-only GRID MCP server (landed).
+6. MarkItDown document tool with local fallbacks (landed).
+7. Tray/autostart host and `--autopilot` entry point (landed).
+8. Optional tools: Sherlock, Nuclei, PlatformIO (landed, opt-in binaries).
+9. Optional Headroom compression, non-system messages only (landed, opt-in).
 
 Each slice must keep the current chat loop working and add an acceptance test.
 
@@ -93,7 +94,8 @@ Each slice must keep the current chat loop working and add an acceptance test.
 ## Verification
 
 - `python -m unittest discover -s tests -v` on Windows CI.
-- `python grid_agent.py --check`.
+- `python evals/run_evals.py` on Windows CI.
+- `python grid_agent.py --check` (80 tools, 4 SKILL.md skills).
 - Piped chat smoke test: `/life help`, `/life identity`, `/persona set`, and a
   scripted autopilot run that cancels on a double-Esc token.
 - A future 24-hour simulated-clock test for budgets, quiet hours and duplicate

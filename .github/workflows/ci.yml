@@ -42,3 +42,6 @@ jobs:
 
       - name: Unit tests
         run: python -m unittest discover -s tests -v
+
+      - name: Routing evals
+        run: python evals/run_evals.py

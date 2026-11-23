@@ -29,5 +29,17 @@ licenses. The main ones are:
 - openpyxl — MIT
 - Google API client libraries — Apache 2.0
 
+## Optional tools
+
+These are not required and are not bundled. They are installed separately by the
+user and keep their own licenses:
+
+- MarkItDown — MIT
+- Headroom (`headroom-ai`) — Apache-2.0
+- Sherlock — MIT
+- Nuclei — MIT
+- PlatformIO — Apache-2.0
+- pystray — LGPL-3.0 (optional tray host)
+
 This notice is a summary, not legal advice. The license shipped with each
 package is authoritative.

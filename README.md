@@ -6,7 +6,7 @@
 
 *An all-in-one, local-first agent for OSINT, networks, radio, satellites, microcontrollers, computer vision, and automation — with a persistent, human-like memory layer.*
 
-[![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-blue.svg)](https://www.python.org/) [![Local-First](https://img.shields.io/badge/Local--First-Optional%20Sync-green.svg)](README.md) [![Tools](https://img.shields.io/badge/73%2B%20Tools-Recon%2FRadio%2FSAT%2FIoT-orange.svg)](README.md) [![User Manual](https://img.shields.io/badge/User%20Manual-GRID_Tools_Test_Guide-blueviolet.svg)](GRID_Tools_Test_Guide.docx)
+[![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-blue.svg)](https://www.python.org/) [![Local-First](https://img.shields.io/badge/Local--First-Optional%20Sync-green.svg)](README.md) [![Tools](https://img.shields.io/badge/80%2B%20Tools-Recon%2FRadio%2FSAT%2FIoT-orange.svg)](README.md) [![User Manual](https://img.shields.io/badge/User%20Manual-GRID_Tools_Test_Guide-blueviolet.svg)](GRID_Tools_Test_Guide.docx)
 
 </div>
 
@@ -57,9 +57,9 @@ The latest release adds a real memory system that works across sessions with **z
 
 ## 🥊 GRID vs Hermes vs OpenClaw — Why GRID Wins
 
-GRID isn't another messaging tool for one AI. It's the **only agent that fuses a full OSINT / field-ops stack directly to a human-like memory**. Hermes and OpenClaw give you a *chat brain* with toys bolted on — GRID ships as a **recon dashboard, a radio rig, a satellite dish, a camera lab, and a microcontroller bench**, all in one terminal. And it does it with **1 file to run** (`python grid_agent.py`), **local-first operation**, and **73+ built-in tools / 100+ sub-commands**.
+GRID isn't another messaging tool for one AI. It's the **only agent that fuses a full OSINT / field-ops stack directly to a human-like memory**. Hermes and OpenClaw give you a *chat brain* with toys bolted on — GRID ships as a **recon dashboard, a radio rig, a satellite dish, a camera lab, and a microcontroller bench**, all in one terminal. And it does it with **1 file to run** (`python grid_agent.py`), **local-first operation**, and **80+ built-in tools / 100+ sub-commands**.
 
-| Capability | **GRID (v3) - 73+ tools** | Hermes | OpenClaw |
+| Capability | **GRID (v3) - 80+ tools** | Hermes | OpenClaw |
 |---|---|---|---|
 | 🧠 **4-tier memory** (persona · scenarios · atoms · offloaded refs) | ✅ built-in, auto-distills every 5 turns | ⚠️ SQLite + user modeling | ⚠️ file-based marks/YAML |
 | 🔍 **OSINT** (domain/IP/email/phone/username, dorking, webcam/CCTV) | ✅ **built-in** | ❌ none | ⚠️ web-search only |
@@ -129,7 +129,7 @@ Copy-Item config.example.json config.json
 .\.venv\Scripts\python.exe grid_agent.py --no-input
 ```
 
-`--check` verifies Python, the required imports, `config.json`, the Ollama server, the selected model and the 73-tool registry. It does not start PocketBase or touch `grid_data.duckdb`.
+`--check` verifies Python, the required imports, `config.json`, the Ollama server, the selected model and the 80-tool registry. It does not start PocketBase or touch `grid_data.duckdb`.
 
 Useful flags:
 
@@ -139,7 +139,7 @@ Useful flags:
 
 If `--check` fails, fix the FAIL lines it prints. Do not launch until all required checks pass.
 
-If the model says it has no tools, make sure Ollama is running and the model supports at least a 16k context. GRID sets `num_ctx=16384`; a smaller context truncates the 73-tool schema.
+If the model says it has no tools, make sure Ollama is running and the model supports at least a 16k context. GRID sets `num_ctx=16384`; a smaller context truncates the 80-tool schema.
 
 ### Chat input
 
@@ -163,7 +163,7 @@ An explicit `/life pause` still wins. Advanced subcommands (`status`, `log`, `go
 
 GRID Life uses the same identity as `/persona`. If you set `/persona set TinaGrid`, then:
 - `/life` starts as TinaGrid and knows `Moltbook as TinaGrid`;
-- its prompt includes the persona, the persistent Moltbook history, and the full 73-tool registry;
+- its prompt includes the persona, the persistent Moltbook history, and the full 80-tool registry;
 - `/persona clear` resets the life identity to `GRID` and asks again on the next `/life`.
 
 If no persona is set, `/life` asks for a name first. It also asks what to work on if there are no active goals.
@@ -196,6 +196,85 @@ Four MIT skills ship in `skill_library/`: `daily-brief`, `osint-report`,
 frontmatter and name. Keep the skill’s license, and review any `scripts/`
 before running it. `/life` sees the same skill list and can load them during
 autopilot.
+
+### Documents
+
+`document_read <path>` converts a local PDF, DOCX, XLSX, PPTX, HTML, CSV, JSON or text file to Markdown/text for analysis. MarkItDown is optional; without it, GRID falls back to text, HTML, JSON, CSV, Excel and DOCX. Install everything with:
+
+```powershell
+.\run.ps1 --install-missing
+```
+
+Files are capped at 20 MB and 16,000 characters per read. No URLs are accepted.
+
+### MCP
+
+GRID is an MCP client and server:
+
+- `mcp_servers` — list configured servers
+- `mcp_tools <server>` — list a server’s tools
+- `mcp_call <server> <tool> <json>` — call one
+
+Configure servers in `config.json`:
+
+```json
+"mcp_servers": {
+  "playwright": {
+    "command": "npx",
+    "args": ["@playwright/mcp@latest"],
+    "enabled": true
+  }
+}
+```
+
+Each server starts lazily and is limited by an optional `allow` list. `mcp_call` is an external action and follows the permission policy.
+
+GRID itself can be a read-only MCP server:
+
+```powershell
+python grid_mcp_server.py
+```
+
+It exposes local system, file, DNS, web, document and skill tools to Claude Code, Codex, Cursor or another MCP client.
+
+### Optional tools
+
+| Tool | Install | Notes |
+|---|---|---|
+| `sherlock_scan` | `pip install sherlock-project` | Username search across public sites |
+| `nuclei_scan` | Nuclei binary on PATH | Requires input prefixed with `authorized`; dangerous, always asks |
+| `pio_build` | `pip install platformio` | ESP32/Arduino build; build scripts are code, so it asks |
+| `pystray` | `pip install pystray` | System tray host |
+
+`--install-missing` installs the Python packages. Nuclei is a separate binary.
+
+### Context compression
+
+Optional Headroom support compresses only non-system history/tool messages; the system prompt and tool names stay intact:
+
+```json
+"life": { "compress_context": true }
+```
+
+Install with `pip install headroom-ai`. Measure tool-selection quality with `python evals/run_evals.py` before keeping it on.
+
+### Tray and autostart
+
+```powershell
+pip install pystray
+.\install_autostart.ps1
+```
+
+The tray shows **Open GRID**, **Start autopilot** and **Quit**. Remove it with `.\uninstall_autostart.ps1`. The tray only launches GRID; tools and autopilot stay in the GRID process.
+
+You can also start autopilot directly:
+
+```powershell
+python grid_agent.py --no-input --autopilot
+python grid_agent.py --no-input --autopilot "Map my home network"
+```
+
+Esc twice returns to manual.
 
 ### Permissions and auto-email
 
@@ -248,8 +327,14 @@ The `email` section must already have working SMTP settings. With `mode: "auto"`
 | `grid_skilldocs.py` | Agent Skills (`SKILL.md`) discovery, validation and loading |
 | `skill_library/` | Built-in SKILL.md procedures (MIT) |
 | `grid_life.py` | Persistent identity, goals, commitments, heartbeat and iLog |
-| `grid_awake.py` | Foreground awake runs, step display and double-Esc cancel |
+| `grid_awake.py` | Autopilot, step display and double-Esc cancel |
 | `grid_permissions.py` | Ask/auto/read-only policy for autonomous tool use |
+| `grid_docs.py` | `document_read` + optional MarkItDown |
+| `grid_mcp.py` / `grid_mcp_server.py` | MCP client manager and read-only GRID MCP server |
+| `grid_optional.py` | Optional Sherlock, Nuclei and PlatformIO wrappers |
+| `grid_context.py` | Optional Headroom context compression |
+| `grid_tray.py` | Optional tray host |
+| `install_autostart.ps1` / `uninstall_autostart.ps1` | Login autostart control |
 | `grid_agent_social.py` | Moltbook social agent platform |
 | `grid_google.py` / `grid_sheets.py` | Google Calendar & Sheets / Excel |
 | `install.py` | One-time setup — deps, models, config |

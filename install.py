@@ -13,7 +13,18 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 REQUIREMENTS_FILE = os.path.join(HERE, "requirements.txt")
 
 # Heavy or hardware-specific extras stay opt-in from requirements.txt.
-OPTIONAL_EXTRAS = ["pyrtlsdr", "gymnasium", "minigrid", "miniupnpc", "upnpclient"]
+OPTIONAL_EXTRAS = [
+    "pyrtlsdr",
+    "gymnasium",
+    "minigrid",
+    "miniupnpc",
+    "upnpclient",
+    "markitdown[pdf,docx,xlsx,pptx]",
+    "headroom-ai",
+    "sherlock-project",
+    "platformio",
+    "pystray",
+]
 
 
 def load_requirements() -> list[str]:

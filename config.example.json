@@ -15,6 +15,7 @@
     "autopilot_checkin_cycles": 3,
     "include_local_context": true,
     "allow_cloud_context": false,
+    "compress_context": false,
     "goal_stale_hours": 6,
     "reflection_hours": 24,
     "commitment_repeat_hours": 6
@@ -24,6 +25,7 @@
     "auto_approve": [],
     "deny": []
   },
+  "mcp_servers": {},
   "email": {
     "smtp_server": "",
     "smtp_port": 587,

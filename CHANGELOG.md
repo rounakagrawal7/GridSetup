@@ -2,31 +2,33 @@
 
 ## v3.0 - GRID Life (in progress)
 
-- `/life` is autopilot: one command, one continuous loop, and Esc twice returns
-  to manual. GRID greets the user, reports each cycle, asks `ASK_USER`
-  follow-ups, and checks in every few cycles.
+- `/life` is autonomous autopilot: one command, one continuous loop, Esc twice
+  returns to manual. GRID greets, reports each cycle, asks `ASK_USER`
+  follow-ups and checks in every few cycles.
 - GRID Life adopts the `/persona` identity. `/persona set TinaGrid` makes
   `/life` TinaGrid, knows `Moltbook as TinaGrid`, and gives the model the full
-  73-tool registry. With no persona, `/life` asks for one; with no goals, it
-  asks what to work on.
+  80-tool registry. With no persona, `/life` asks; with no goals, it asks what
+  to work on.
 - Autopilot reads recent chats, durable memory, tool logs, scan results and
-  local database counts, can inspect more with `db_query`, and redacts obvious
-  secrets. Cloud backends omit this context unless `life.allow_cloud_context`
-  is true.
-- Life state lives in DuckDB: identity, goals, commitments, relationships,
-  events, heartbeat, budgets, quiet hours, reflections, pending messages and
-  iLog.
-- Permission policy covers all 73 tools with `ask`, `auto` and `read_only`
-  modes, session approvals and `auto_approve` for external actions such as
-  automatic email.
+  local DB summaries; secrets are redacted. Cloud backends omit this context
+  unless `life.allow_cloud_context` is true.
+- Agent Skills (`SKILL.md`): validated frontmatter, progressive loading,
+  `skill_search`, `skill_load`, `skill_read`, and four built-in MIT skills.
+- MCP client (`mcp_servers`, `mcp_tools`, `mcp_call`) and a read-only GRID MCP
+  server for Claude Code, Codex, Cursor and other clients.
+- `document_read` with optional MarkItDown for PDF/DOCX/XLSX/PPTX, plus local
+  fallbacks for text, HTML, JSON, CSV, Excel and DOCX.
+- Optional `sherlock_scan`, `nuclei_scan` (requires `authorized`) and
+  `pio_build` wrappers.
+- Optional Headroom compression applies only to non-system messages.
+- Tray host (`grid_tray.py`) plus login autostart scripts; `--autopilot` starts
+  without the menu.
+- Permission policy covers all 80 tools with `ask`, `auto` and `read_only`
+  modes, session approvals and `auto_approve` for external actions.
 - Double-Esc cancellation works across streaming, tool steps and `run_command`.
-- The app, setup banner, installer, README and manual use GRID v3.
-- Agent Skills (`SKILL.md`) loader: validates frontmatter, loads only name and
-  description into the prompt, and adds `skill_search`, `skill_load` and
-  `skill_read`. Four built-in MIT skills ship in `skill_library/`; Anthropic
-  and community Apache-2.0 skills can be dropped in.
-- 43 tests cover the life loop, persona sync, permissions, cancellation,
-  autopilot, local context and SKILL.md validation; CI runs them.
+- 67 tests and 49 routing eval cases cover the life loop, persona sync,
+  permissions, cancellation, autopilot, local context, skills, MCP, documents,
+  optional tools and tray.
 
 ## v2.0.1 - clean run
 

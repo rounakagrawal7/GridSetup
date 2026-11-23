@@ -26,6 +26,7 @@ LIFE_DEFAULTS: Dict[str, Any] = {
     "autopilot_checkin_cycles": 3,
     "include_local_context": True,
     "allow_cloud_context": False,
+    "compress_context": False,
     "goal_stale_hours": 6,
     "reflection_hours": 24,
     "commitment_repeat_hours": 6,

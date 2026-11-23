@@ -10,10 +10,12 @@ from typing import Any, Callable, Dict, Optional, Set, Tuple
 
 
 READ_ONLY: Set[str] = {
-    "db_analytics", "db_query", "dns_lookup", "dork", "file_search",
-    "get_cwd", "list_directory", "list_skills", "memory_recall",
-    "memory_status", "netstat", "osint", "pb_status", "ping", "ref_read",
-    "satellite", "screen_res", "system_info", "table", "telegram_status",
+    "db_analytics", "db_query", "dns_lookup", "document_read", "dork", "file_search",
+    "get_cwd", "list_directory", "list_skills", "read_file",
+    "skill_load", "skill_read", "skill_search", "memory_recall",
+    "mcp_servers", "mcp_tools", "memory_status", "netstat", "osint",
+    "pb_status", "ping", "ref_read", "satellite", "screen_res",
+    "system_info", "table", "telegram_status",
     "weather", "web_fetch", "web_search", "youtube_transcript",
 }
 
@@ -27,7 +29,8 @@ LOCAL_WRITE: Set[str] = {
 }
 
 EXTERNAL: Set[str] = {
-    "email_send", "gcal", "ghostcam", "gsheet", "http_request",
+    "email_send", "gcal", "ghostcam", "gsheet", "http_request", "mcp_call",
+    "sherlock_scan",
     "nc_banner_grab", "nc_connect", "nc_scan", "nc_transfer", "nmap_scan",
     "pb_sync", "pb_upload", "social", "telegram_send",
 }
@@ -40,6 +43,7 @@ DANGEROUS: Set[str] = {
     "delete_file", "delete_skill", "mouse_click", "mouse_move",
     "mouse_scroll", "nc_chat", "nc_listen", "nc_proxy", "press_keys",
     "process_manager", "run_code", "run_command", "type_text",
+    "nuclei_scan", "pio_build",
 }
 
 RISK_LABELS = {
