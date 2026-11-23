@@ -3814,7 +3814,9 @@ class GridOrchestrator:
             "When a user speaks to you for the first time, briefly introduce yourself as GRID "
             "and state your capabilities if it's relevant, but stay concise. "
             "You have access to ALL tools listed in this prompt. "
-            "Always check the available tools list before refusing a request.\n\n"
+            "Always check the available tools list before refusing a request. "
+            "Never invent or reuse a tool result: a result only exists when a tool actually ran in this turn. "
+            "If the user asks for live data, emit a TOOL_CALL even when memory contains an older answer.\n\n"
 
             "=== CAPABILITY CATEGORIES ===\n\n"
             "1. COMPUTER USE: mouse_move (move cursor), mouse_click (left/right/middle), "
@@ -3969,7 +3971,7 @@ class GridOrchestrator:
             (r"(?:open|launch)\s+(?:the\s+)?(?:KiwiSDR|kiwi|sdr)\s+(?:at|on|for)?\s*(\S+)", "radio", lambda m: f"kiwi open {m.group(1)}"),
             (r"(?:open|launch|start)\s+(.+)", "run_command", lambda m: f"start {m.group(1)}"),
             (r"(?:show|list)\s+(?:all\s+)?process(?:es)?", "process_manager", "list"),
-            (r"(?:get|show)\s+system\s+info", "system_info", ""),
+            (r"(?:what is|what's|tell me|show me|get|show)\s+(?:my\s+)?system\s+(?:info|information|specs?)", "system_info", ""),
             (r"(?:take|get)\s+a?\s*screenshot", "screenshot", ""),
             (r"(?:what is|what's|get|show)\s+(?:the )?weather\s+(?:in |for |at )?(.+)", "weather", "{0}"),
             (r"(?:search|google|look up)\s+(?:the web|the internet|web|for)?\s*(.+)", "web_search", "{0}"),
@@ -4753,6 +4755,13 @@ def run_checks(args) -> int:
     for mod, label in [
         ("rich", "rich"), ("requests", "requests"), ("duckdb", "duckdb"),
         ("cv2", "opencv"), ("numpy", "numpy"), ("PIL", "pillow"),
+        ("bs4", "beautifulsoup4"), ("ddgs", "ddgs"), ("pandas", "pandas"),
+        ("matplotlib", "matplotlib"), ("phonenumbers", "phonenumbers"),
+        ("openpyxl", "openpyxl"), ("serial", "pyserial"),
+        ("youtube_transcript_api", "youtube-transcript-api"),
+        ("pytesseract", "pytesseract"), ("pyautogui", "pyautogui"),
+        ("keyboard", "keyboard"), ("googleapiclient", "google-api-python-client"),
+        ("google_auth_oauthlib", "google-auth-oauthlib"),
     ]:
         try:
             __import__(mod)

@@ -11,6 +11,19 @@
 - Added `run.ps1` and a “Clean start” README section with a venv workflow.
 - `config.example.json` is now an Ollama-ready template; a fresh clone copies it
   to `config.json` before running `--check`.
+- `install.py` now reads `requirements.txt` instead of keeping a second package
+  list, and seeds `config.json` from the example (including `backend_type`).
+- Added `pyserial` and `youtube-transcript-api` to `requirements.txt` and
+  required `youtube-transcript-api>=1.0`, matching the API the code calls.
+- `--check` now verifies all core imports from `requirements.txt`, so a partial
+  pip install fails before launch.
+- Questions like “what is my system info?” now run `system_info` directly
+  instead of relying on the model.
+- The system prompt tells the model never to present a remembered answer as a
+  fresh tool result, which prevents stale memory from masking live data.
+- User manual: aligned the capability-group count to 16 and removed two
+  duplicated capability bullets.
+- CI now fails if the registry drops below 70 tools.
 - The app starts Ollama itself when it is not running, then reaches the menu.
 - Ollama now uses `num_ctx=16384`, so the 70-tool schema is not truncated and
   natural-language tool calls work on `gemma4:e2b`.

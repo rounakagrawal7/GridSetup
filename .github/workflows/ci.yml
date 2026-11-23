@@ -38,4 +38,4 @@ jobs:
           python -m pip install rich requests duckdb numpy pillow opencv-python-headless
 
       - name: Import and tool registry
-        run: python -c "import grid_agent; print('tools', len(grid_agent.Tools.registry)); assert len(grid_agent.Tools.registry) > 0"
+        run: python -c "import grid_agent; print('tools', len(grid_agent.Tools.registry)); assert len(grid_agent.Tools.registry) >= 70"

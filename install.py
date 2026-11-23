@@ -9,14 +9,27 @@ import sys
 import os
 import json
 
-REQUIREMENTS = [
-    "rich", "openai", "ollama", "requests", "beautifulsoup4", "ddgs",
-    "duckdb", "pyautogui", "keyboard", "pandas", "numpy", "matplotlib",
-    "phonenumbers", "opencv-contrib-python", "pillow", "pytesseract",
-    "google-auth", "google-auth-oauthlib", "google-api-python-client",
-    "openpyxl", "pyserial", "pyrtlsdr", "youtube-transcript-api",
-    "gymnasium", "minigrid", "miniupnpc", "upnpclient",
-]
+HERE = os.path.dirname(os.path.abspath(__file__))
+REQUIREMENTS_FILE = os.path.join(HERE, "requirements.txt")
+
+# Heavy or hardware-specific extras stay opt-in from requirements.txt.
+OPTIONAL_EXTRAS = ["pyrtlsdr", "gymnasium", "minigrid", "miniupnpc", "upnpclient"]
+
+
+def load_requirements() -> list[str]:
+    """Keep the installer in sync with requirements.txt."""
+    if not os.path.exists(REQUIREMENTS_FILE):
+        return []
+    packages = []
+    with open(REQUIREMENTS_FILE, encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if line and not line.startswith("#"):
+                packages.append(line)
+    return packages
+
+
+REQUIREMENTS = load_requirements() + OPTIONAL_EXTRAS
 
 CASCADE_URL = "https://raw.githubusercontent.com/opencv/opencv/4.x/data/haarcascades/haarcascade_frontalface_default.xml"
 CASCADE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "haarcascade_frontalface_default.xml")
@@ -50,11 +63,13 @@ def download_cascade():
 
 
 def create_config():
-    config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
+    config_path = os.path.join(HERE, "config.json")
     if os.path.exists(config_path):
         print("  [*] config.json already exists")
         return
+
     default = {
+        "backend_type": "ollama",
         "base_url": "http://localhost:11434",
         "model": "gemma4:e4b",
         "telegram_bot_token": "",
@@ -67,9 +82,19 @@ def create_config():
             "from_addr": ""
         }
     }
-    with open(config_path, "w") as f:
+
+    # Prefer the checked-in template so the installer and example never drift.
+    example_path = os.path.join(HERE, "config.example.json")
+    if os.path.exists(example_path):
+        try:
+            with open(example_path, encoding="utf-8") as f:
+                default = json.load(f)
+        except (OSError, json.JSONDecodeError):
+            pass
+
+    with open(config_path, "w", encoding="utf-8") as f:
         json.dump(default, f, indent=2)
-    print(f"  [*] Created default config.json (edit with your Telegram/email settings)")
+    print("  [*] Created config.json (edit with your Telegram/email settings)")
 
 
 def check_tesseract():

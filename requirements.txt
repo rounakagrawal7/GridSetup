@@ -28,6 +28,10 @@ matplotlib>=3.7
 # OSINT
 phonenumbers>=8.13
 
+# Microcontroller IoT & YouTube
+pyserial>=3.5
+youtube-transcript-api>=1.0
+
 # Google APIs
 google-api-python-client>=2.0
 google-auth-oauthlib>=1.0
