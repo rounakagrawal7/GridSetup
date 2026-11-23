@@ -3,6 +3,7 @@ GRID v2 — System Manager Agent
 Ollama, LM Studio & OpenRouter backends. Web, network, system tools, streaming, planner, config, export.
 """
 
+import argparse
 import json
 import os
 import random
@@ -103,6 +104,7 @@ except ImportError:
 MEMORY_FILE = "memory.md"
 CONFIG_FILE = "config.json"
 OLLAMA_PORT = 11434
+OLLAMA_NUM_CTX = 16384
 LMSTUDIO_PORT = 1234
 MAX_TOOL_TURNS = 5
 REFS_DIR = "refs"
@@ -160,7 +162,7 @@ def _pip_install(pip_name: str) -> bool:
         return False
 
 
-def ensure_deps():
+def ensure_deps(install_missing: bool = False):
     required = [("rich", "rich", "UI framework")]
     optional = [
         ("openai", "openai", "LM Studio backend"),
@@ -205,6 +207,11 @@ def ensure_deps():
             missing.append((import_name, pip_name, label, False))
 
     if not missing:
+        return
+
+    if not install_missing:
+        names = ", ".join(pip_name for _, pip_name, _, _ in missing)
+        console.print(f"[dim]Optional packages missing: {names}. Tools stay disabled; run with --install-missing.[/dim]")
         return
 
     console.print()
@@ -301,7 +308,7 @@ class LLMBackend:
                 return resp.choices[0].message.content or ""
             resp = self._client.chat(
                 model=self.model, messages=messages,
-                options={"temperature": temperature},
+                options={"temperature": temperature, "num_ctx": OLLAMA_NUM_CTX},
             )
             return resp["message"]["content"]
         except Exception as e:
@@ -325,7 +332,7 @@ class LLMBackend:
                 else:
                     stream = self._client.chat(
                         model=self.model, messages=messages,
-                        options={"temperature": temperature},
+                        options={"temperature": temperature, "num_ctx": OLLAMA_NUM_CTX},
                         stream=True,
                     )
                     for part in stream:
@@ -2046,17 +2053,27 @@ class Tools:
             pass
         try:
             if sys.platform.lower().startswith("win"):
-                r = subprocess.run(["wmic", "os", "get", "TotalVisibleMemorySize,FreePhysicalMemory"],
-                                   capture_output=True, text=True, timeout=10)
-                if r.returncode == 0:
-                    lines.append(f"Memory (WMIC): {r.stdout.strip()[:120]}")
-                r2 = subprocess.run(["wmic", "diskdrive", "get", "size"],
-                                    capture_output=True, text=True, timeout=10)
-                if r2.returncode == 0:
-                    sizes = [l.strip() for l in r2.stdout.splitlines() if l.strip() and l.strip().isdigit()]
+                mem = subprocess.run(
+                    ["powershell", "-NoProfile", "-Command",
+                     "Get-CimInstance Win32_OperatingSystem | Select-Object TotalVisibleMemorySize,FreePhysicalMemory | ConvertTo-Json -Compress"],
+                    capture_output=True, text=True, timeout=10,
+                )
+                if mem.returncode == 0 and mem.stdout.strip():
+                    data = json.loads(mem.stdout)
+                    total = int(data["TotalVisibleMemorySize"]) / 1024 / 1024
+                    free = int(data["FreePhysicalMemory"]) / 1024 / 1024
+                    lines.append(f"Memory:        {free:.1f} GB free / {total:.1f} GB total")
+                disk = subprocess.run(
+                    ["powershell", "-NoProfile", "-Command",
+                     "Get-CimInstance Win32_DiskDrive | Select-Object -ExpandProperty Size | ConvertTo-Json -Compress"],
+                    capture_output=True, text=True, timeout=10,
+                )
+                if disk.returncode == 0 and disk.stdout.strip():
+                    raw = json.loads(disk.stdout)
+                    sizes = raw if isinstance(raw, list) else [raw]
+                    sizes = [int(s) for s in sizes if s]
                     if sizes:
-                        total = sum(int(s) for s in sizes) // (10**12)
-                        lines.append(f"Disk total:    ~{total} TB ({len(sizes)} drives)")
+                        lines.append(f"Disk total:    ~{sum(sizes)/(10**12):.1f} TB ({len(sizes)} drives)")
             else:
                 r = subprocess.run(["free", "-h"], capture_output=True, text=True, timeout=10)
                 if r.returncode == 0:
@@ -2064,9 +2081,16 @@ class Tools:
                 r2 = subprocess.run(["df", "-h", "--total"], capture_output=True, text=True, timeout=10)
                 if r2.returncode == 0:
                     lines.append(f"Disk:\n{r2.stdout.strip()}")
-        except Exception as e:
-            lines.append(f"(partial info: {e})")
-        lines.append(f"Local IP:      {socket.gethostbyname(socket.gethostname())}")
+        except Exception:
+            pass
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.connect(("8.8.8.8", 80))
+            local_ip = s.getsockname()[0]
+            s.close()
+        except Exception:
+            local_ip = socket.gethostbyname(socket.gethostname())
+        lines.append(f"Local IP:      {local_ip}")
         return "\n".join(lines)
 
     @staticmethod
@@ -4377,8 +4401,63 @@ def _pick_model(backend_type: str, base_url: str) -> str:
     return model
 
 
-def choose_backend() -> LLMBackend:
+def _choose_backend_from_config(cfg: dict) -> LLMBackend:
+    """Use config.json without prompting. Used by --no-input and --check."""
+    backend_type = (cfg.get("backend_type") or "").strip().lower()
+    if not backend_type:
+        if HAS_OLLAMA:
+            backend_type = "ollama"
+        elif HAS_OPENAI:
+            backend_type = "openrouter"
+        else:
+            console.print("[red][x] No backend configured and no backend package installed.[/red]")
+            sys.exit(2)
+
+    defaults = {
+        "ollama": "http://localhost:11434",
+        "lm_studio": "http://localhost:1234/v1",
+        "openrouter": "https://openrouter.ai/api/v1",
+    }
+    base_url = (cfg.get("base_url") or defaults.get(backend_type, "")).rstrip("/")
+    model = (cfg.get("model") or "").strip()
+
+    if backend_type == "ollama" and not HAS_OLLAMA:
+        console.print("[red][x] Ollama selected, but the 'ollama' package is missing: pip install ollama[/red]")
+        sys.exit(2)
+    if backend_type in ("lm_studio", "openrouter") and not HAS_OPENAI:
+        console.print("[red][x] OpenAI-compatible backend selected, but the 'openai' package is missing: pip install openai[/red]")
+        sys.exit(2)
+    if not model:
+        console.print("[red][x] No model in config.json. Run once without --no-input to select one.[/red]")
+        sys.exit(2)
+
+    if backend_type == "ollama":
+        if not _port_open("127.0.0.1", OLLAMA_PORT):
+            base_url = ensure_server("ollama") or base_url
+        models = LLMBackend.fetch_models(backend_type, base_url)
+        if models and model not in models:
+            console.print(f"[red][x] Model '{model}' is not installed in Ollama.[/red]")
+            console.print("  Available: " + ", ".join(models[:12]))
+            console.print(f"  Install it with: ollama pull {model}")
+            sys.exit(2)
+    elif backend_type == "openrouter":
+        if not cfg.get("openrouter_api_key"):
+            console.print("[red][x] OpenRouter selected, but no openrouter_api_key in config.json.[/red]")
+            sys.exit(2)
+    elif backend_type == "lm_studio":
+        if not _port_open("127.0.0.1", LMSTUDIO_PORT):
+            console.print(f"[red][x] LM Studio is not listening on {base_url}.[/red]")
+            sys.exit(2)
+
+    console.print(f"  [{M}][+][/] Backend: [bold]{backend_type}[/]  |  Model: [bold]{model}[/]")
+    return LLMBackend(backend_type, model, base_url)
+
+
+def choose_backend(non_interactive: bool = False) -> LLMBackend:
     cfg = load_config()
+
+    if non_interactive:
+        return _choose_backend_from_config(cfg)
 
     console.print()
     console.print(Panel.fit(
@@ -4656,9 +4735,109 @@ def _startup_banner():
     _matrix_banner()
 
 
-def main():
-    ensure_deps()
-    backend = choose_backend()
+def run_checks(args) -> int:
+    """Non-interactive setup check. Does not prompt, start PocketBase or touch the real DB."""
+    cfg = load_config()
+    backend_type = (cfg.get("backend_type") or "ollama").strip().lower()
+    base_url = (cfg.get("base_url") or "").rstrip("/")
+    if backend_type == "ollama" and not base_url:
+        base_url = "http://localhost:11434"
+    model = (cfg.get("model") or "").strip()
+    checks = []
+
+    def add(label, ok, detail="", required=True):
+        checks.append((label, bool(ok), detail, required))
+
+    add("Python >= 3.10", sys.version_info >= (3, 10), sys.version.split()[0])
+
+    for mod, label in [
+        ("rich", "rich"), ("requests", "requests"), ("duckdb", "duckdb"),
+        ("cv2", "opencv"), ("numpy", "numpy"), ("PIL", "pillow"),
+    ]:
+        try:
+            __import__(mod)
+            add(f"import {label}", True)
+        except Exception as e:
+            add(f"import {label}", False, str(e))
+
+    add("backend package", HAS_OLLAMA if backend_type == "ollama" else HAS_OPENAI, backend_type)
+    add("config: model", bool(model), model or "(missing)")
+    add("config: base_url", bool(base_url), base_url or "(missing)")
+
+    if backend_type == "ollama":
+        if not _port_open("127.0.0.1", OLLAMA_PORT):
+            add("Ollama reachable", False, f"{base_url} (start with: ollama serve)")
+            add(f"model {model}", False, "server not running")
+        else:
+            try:
+                models = LLMBackend.fetch_models("ollama", base_url)
+                add("Ollama reachable", bool(models), base_url)
+                add(f"model {model}", model in models, ", ".join(models[:6]) if models else "no models")
+            except Exception as e:
+                add("Ollama reachable", False, str(e))
+    elif backend_type == "openrouter":
+        key = cfg.get("openrouter_api_key", "")
+        add("OpenRouter key", bool(key), "set" if key else "missing")
+    elif backend_type == "lm_studio":
+        add("LM Studio reachable", _port_open("127.0.0.1", LMSTUDIO_PORT), base_url)
+    else:
+        add("backend type", False, backend_type)
+
+    try:
+        import duckdb
+        con = duckdb.connect(":memory:")
+        con.close()
+        add("DuckDB", True, "in-memory")
+    except Exception as e:
+        add("DuckDB", False, str(e))
+
+    try:
+        add("tool registry", len(Tools.registry) > 0, f"{len(Tools.registry)} tools")
+    except Exception as e:
+        add("tool registry", False, str(e))
+
+    try:
+        from grid_pb import PocketBaseManager
+        pb = PocketBaseManager()
+        add("PocketBase binary (optional)", bool(pb._find_binary()), "optional", required=False)
+    except Exception as e:
+        add("PocketBase binary (optional)", False, str(e), required=False)
+
+    print()
+    print("GRID setup check")
+    print("=" * 64)
+    failures = 0
+    for label, ok, detail, required in checks:
+        mark = "PASS" if ok else ("FAIL" if required else "WARN")
+        if not ok and required:
+            failures += 1
+        line = f"  {mark:4}  {label}"
+        if detail:
+            line += f"  -  {detail}"
+        print(line)
+    print()
+    if failures:
+        print(f"{failures} required check(s) failed.")
+        print("Fix the FAIL lines, then run: python grid_agent.py --check")
+        return 1
+    print("All required checks passed.")
+    print("Start with: python grid_agent.py --no-input")
+    return 0
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description="GRID v2 - local recon and automation agent")
+    parser.add_argument("--check", action="store_true", help="check config, model and tools, then exit")
+    parser.add_argument("--no-input", action="store_true", help="use config.json; do not prompt for backend or model")
+    parser.add_argument("--no-banner", action="store_true", help="skip the Matrix banner")
+    parser.add_argument("--install-missing", action="store_true", help="install missing optional packages")
+    args = parser.parse_args(argv)
+
+    if args.check:
+        sys.exit(run_checks(args))
+
+    ensure_deps(install_missing=args.install_missing)
+    backend = choose_backend(non_interactive=args.no_input)
     memory = Memory(MEMORY_FILE)
     recaller = None
     orchestrator = GridOrchestrator(backend, memory, recaller)
@@ -4929,7 +5108,8 @@ def main():
             console.print(f"  [{M_DIM}][!] PocketBase not found. Use /pb to install.[/]")
 
     turn_count = len(memory.history) // 2
-    _startup_banner()
+    if not args.no_banner:
+        _startup_banner()
     summary = Table.grid(padding=(0, 2))
     summary.add_column(style=f"bold {M}", justify="right")
     summary.add_column(style=f"bold {M_BRIGHT}")
@@ -4995,7 +5175,7 @@ def main():
             console.print()
             welcome_msg = (
                 f"[bold {M}]GRID v2[/] — OSINT, networking, automation.\n"
-f"15 capability groups: [bold]Computer Use[/] | [bold]Files[/] | [bold]Shell[/] | "
+f"16 capability groups: [bold]Computer Use[/] | [bold]Files[/] | [bold]Shell[/] | "
              f"[bold]Web[/] | [bold]Network[/] | [bold]Netcat[/] | [bold]System[/] | "
              f"[bold]Data & Code[/] | [bold]DB[/] | [bold]OSINT[/] | [bold]Comms[/] | [bold]Vision[/] | [bold]Social[/] | [bold]Radio[/] | [bold]Satellite[/].\n"
                 f"Type [bold {M}]/tools[/] for details or just tell me what you need."

@@ -1155,16 +1155,24 @@ def _auto_reply_cycle() -> tuple[int, list]:
 
 
 def _auto_upvote_cycle(limit: int = 5) -> tuple[int, list]:
-    """Upvote interesting posts from the feed. Returns (count, lines)."""
+    """Upvote promising young posts from the feed. Returns (count, lines)."""
     c = get_client()
     count = 0
     lines = []
     try:
-        feed = c.get_feed("home", "hot", 15)
-        data = json.loads(feed)
+        # Sample both the Hot feed (established posts) and the New feed (fresh
+        # posts with few votes) so there is always something worth boosting.
+        posts = []
+        seen = set()
+        for sort in ("hot", "new"):
+            feed = json.loads(c.get_feed("home", sort, 15))
+            for p in (feed.get("posts") or feed.get("data") or []):
+                pid = p.get("post_id") or p.get("id")
+                if pid and pid not in seen:
+                    seen.add(pid)
+                    posts.append(p)
     except (json.JSONDecodeError, ValueError):
         return 0, lines
-    posts = data.get("posts") or data.get("data") or []
     for post in posts:
         if count >= limit:
             break
@@ -1173,12 +1181,17 @@ def _auto_upvote_cycle(limit: int = 5) -> tuple[int, list]:
         if author.get("id") == c.agent_id:
             continue
         upvotes = post.get("upvotes") or 0
-        if upvotes < 5:  # boost promising-but-young posts
-            result = c.upvote_post(pid)
-            if '"success":true' in result or "error" not in result.lower():
-                count += 1
-                lines.append(f"  [Upvote] {post.get('title','')[:60]}")
-                _social_log("upvote", f"Auto-upvoted '{post.get('title','')[:50]}'", f"{MOLTBOOK_BASE}/posts/{pid}")
+        if upvotes >= 5:  # already well-received — don't boost
+            continue
+        if not _claim_id(MOLTBOOK_UPVOTED_FILE, pid):
+            continue
+        result = c.upvote_post(pid)
+        if '"success":true' in result or "error" not in result.lower():
+            count += 1
+            lines.append(f"  [Upvote] {post.get('title','')[:60]}")
+            _social_log("upvote", f"Auto-upvoted '{post.get('title','')[:50]}'", f"{MOLTBOOK_BASE}/posts/{pid}")
+        else:
+            _release_claim(MOLTBOOK_UPVOTED_FILE, pid)
     if count == 0:
         lines.append("  [Upvote] nothing to upvote this cycle")
     return count, lines

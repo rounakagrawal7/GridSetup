@@ -6,13 +6,17 @@
 
 *An all-in-one, local-first agent for OSINT, networks, radio, satellites, microcontrollers, computer vision, and automation — with a persistent, human-like memory layer.*
 
+[![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-blue.svg)](https://www.python.org/) [![Local-First](https://img.shields.io/badge/Local--First-Optional%20Sync-green.svg)](README.md) [![Tools](https://img.shields.io/badge/70%2B%20Tools-Recon%2FRadio%2FSAT%2FIoT-orange.svg)](README.md) [![User Manual](https://img.shields.io/badge/User%20Manual-GRID_Tools_Test_Guide-blueviolet.svg)](GRID_Tools_Test_Guide.docx)
+
 </div>
+
+> 📘 **New to GRID?** Download the **[GRID Tools Test Guide](GRID_Tools_Test_Guide.docx)** — the full manual with command reference, tool descriptions, and examples.
 
 ---
 
 ## ✨ What is GRID?
 
-GRID is a self-aware terminal agent that runs fully on your machine. It combines **16 capability groups** — OSINT, network recon, SDR/radio, satellite tracking, microcontroller IoT, computer vision, agent platforms, and automation — under a single conversational interface powered by your local LLM (Ollama), or any OpenAI-compatible backend.
+GRID is a self-aware terminal agent that runs locally, with optional network tools. It combines **16 capability groups** — OSINT, network recon, SDR/radio, satellite tracking, microcontroller IoT, computer vision, agent platforms, and automation — under a single conversational interface powered by your local LLM (Ollama), or any OpenAI-compatible backend.
 
 Unlike tool wrappers that live or die on a fixed context window, GRID ships with a **layered memory engine** inspired by modern agent-memory research (e.g. Tencent's 4-tier memory pyramid). It doesn't forget between sessions: it distills what it learns into reusable knowledge instead of drowning in truncated logs.
 
@@ -53,9 +57,9 @@ The latest release adds a real memory system that works across sessions with **z
 
 ## 🥊 GRID vs Hermes vs OpenClaw — Why GRID Wins
 
-GRID isn't another messaging tool for one AI. It's the **only agent that fuses a full OSINT / field-ops stack directly to a human-like memory**. Hermes and OpenClaw give you a *chat brain* with toys bolted on — GRID ships as a **recon dashboard, a radio rig, a satellite dish, a camera lab, and a microcontroller bench**, all in one terminal. And it does it with **1 file to run** (`python grid_agent.py`), **zero cloud**, and **68+ built-in tools / 100+ sub-commands**.
+GRID isn't another messaging tool for one AI. It's the **only agent that fuses a full OSINT / field-ops stack directly to a human-like memory**. Hermes and OpenClaw give you a *chat brain* with toys bolted on — GRID ships as a **recon dashboard, a radio rig, a satellite dish, a camera lab, and a microcontroller bench**, all in one terminal. And it does it with **1 file to run** (`python grid_agent.py`), **local-first operation**, and **70+ built-in tools / 100+ sub-commands**.
 
-| Capability | **GRID (v2) — 68+ tools** | Hermes | OpenClaw |
+| Capability | **GRID (v2) - 70+ tools** | Hermes | OpenClaw |
 |---|---|---|---|
 | 🧠 **4-tier memory** (persona · scenarios · atoms · offloaded refs) | ✅ built-in, auto-distills every 5 turns | ⚠️ SQLite + user modeling | ⚠️ file-based marks/YAML |
 | 🔍 **OSINT** (domain/IP/email/phone/username, dorking, webcam/CCTV) | ✅ **built-in** | ❌ none | ⚠️ web-search only |
@@ -99,6 +103,42 @@ python grid_agent.py
 ```
 
 On first launch, select your LLM backend (Ollama), then pick a model.
+
+### Clean start (recommended)
+
+Use an isolated environment, check the setup, then launch without the wizard.
+
+```powershell
+# 1. Install Ollama, then pull the model
+ollama serve
+ollama pull gemma4:e2b
+
+# 2. Create an isolated environment
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install --upgrade pip
+.\.venv\Scripts\pip.exe install -r requirements.txt
+
+# 3. Check the setup before launching
+.\.venv\Scripts\python.exe grid_agent.py --check
+
+# 4. Launch without the setup prompts
+.\.venv\Scripts\python.exe grid_agent.py --no-input
+```
+
+`--check` verifies Python, the required imports, `config.json`, the Ollama server, the selected model and the 70-tool registry. It does not start PocketBase or touch `grid_data.duckdb`.
+
+Useful flags:
+
+- `--no-banner` — skip the 5-second Matrix banner.
+- `--install-missing` — install optional packages (RTL-SDR, MiniGrid, UPnP, etc.). Without it, missing optional tools are reported and disabled.
+- `--no-input` — use `config.json` instead of the backend/model wizard.
+
+If `--check` fails, fix the FAIL lines it prints. Do not launch until all required checks pass.
+
+If the model says it has no tools, make sure Ollama is running and the model supports at least a 16k context. GRID sets `num_ctx=16384`; a smaller context truncates the 70-tool schema.
+
+
+> 📘 After first launch, open **`GRID_Tools_Test_Guide.docx`** for the full command reference.
 
 ---
 
@@ -259,3 +299,7 @@ A single cycle runs all phases: reply to new comments on **your own posts**, upv
 ## Documentation
 
 Open `GRID_Tools_Test_Guide.docx` for the complete user manual, tool descriptions, examples, and quick-reference commands.
+
+## License
+
+GRID is MIT-licensed — see [LICENSE.md](LICENSE.md). PocketBase and other third-party components keep their own licenses; see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) and [third_party/pocketbase/LICENSE.md](third_party/pocketbase/LICENSE.md).

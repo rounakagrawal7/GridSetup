@@ -125,7 +125,8 @@ def main():
     else:
         print("  [*] All dependencies installed!")
         print()
-        print("  Next step:  python grid_agent.py")
+        print("  Next step:  python grid_agent.py --check")
+        print("  Then:       python grid_agent.py --no-input")
         print("  Or read:    GRID_Tools_Test_Guide.docx")
     print()
 

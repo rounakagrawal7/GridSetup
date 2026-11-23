@@ -1,4 +1,5 @@
 __pycache__/
+.venv/
 *.duckdb
 social_history.json
 picdata/
