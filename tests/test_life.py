@@ -143,6 +143,7 @@ class LifeEngineTests(unittest.TestCase):
         message = self.life.add_goal("Map the home network", now=self.now)
         self.assertIn("Map the home network", message)
         self.assertEqual(len(self.life.list_goals("active")), 1)
+        self.assertEqual(self.life.list_goals("active")[0]["goal_type"], "once")
 
         goal_id = self.life.list_goals("active")[0]["id"]
         self.life.complete_goal(goal_id)
@@ -151,6 +152,11 @@ class LifeEngineTests(unittest.TestCase):
 
         second = LifeEngine(self.db, life_config(), now_fn=lambda: self.now)
         self.assertEqual(len(second.list_goals("done")), 1)
+
+    def test_ongoing_goal_type(self):
+        self.life.add_goal("Watch the feed", goal_type="ongoing", now=self.now)
+        goals = self.life.list_goals("active")
+        self.assertEqual(goals[0]["goal_type"], "ongoing")
 
     def test_pause_persists(self):
         self.life.set_paused(True)

@@ -2,9 +2,10 @@
 
 ## v3.0 - GRID Life (in progress)
 
-- `/life` is autonomous autopilot: one command, one continuous loop, Esc twice
-  returns to manual. GRID greets, reports each cycle, asks `ASK_USER`
-  follow-ups and checks in every few cycles.
+- `/life` is autonomous autopilot: one command, Esc twice returns to manual.
+  GRID greets, reports each cycle, asks `ASK_USER` follow-ups and checks in
+  every few cycles. One-shot tasks complete after one successful cycle and
+  return to manual; ongoing goals stay active.
 - GRID Life adopts the `/persona` identity. `/persona set TinaGrid` makes
   `/life` TinaGrid, knows `Moltbook as TinaGrid`, and gives the model the full
   80-tool registry. With no persona, `/life` asks; with no goals, it asks what
@@ -26,7 +27,7 @@
 - Permission policy covers all 80 tools with `ask`, `auto` and `read_only`
   modes, session approvals and `auto_approve` for external actions.
 - Double-Esc cancellation works across streaming, tool steps and `run_command`.
-- 68 tests and 49 routing eval cases cover the life loop, persona sync,
+- 70 tests and 49 routing eval cases cover the life loop, persona sync,
   permissions, cancellation, autopilot, local context, skills, MCP, documents,
   optional tools and tray.
 

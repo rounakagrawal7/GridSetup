@@ -157,6 +157,8 @@ GRID v3 adds a persistent local life layer: identity, goals, commitments, a hear
 
 `/life` starts the conversation itself: it greets you in the current persona, says what it is about to work on, reports each cycle, and asks a follow-up when it needs a decision. It also checks in every few cycles. **Esc twice** is the only thing you need to return to manual chat.
 
+A `/life <task>` goal is **one-shot**: after one successful cycle it is marked done and autopilot returns to manual. For a long-running goal, add it explicitly with `/life goal add ongoing <title>`.
+
 Defaults live in `config.json` under `life`: 30-minute heartbeat, quiet hours 22:00–08:00, a 09:00 brief, and daily budgets of 12 actions and 6 messages. The standalone `python grid_life.py status|tick|log` works when GRID is closed.
 
 An explicit `/life pause` still wins. Advanced subcommands (`status`, `log`, `goals`, `identity`, `pause`, `resume`) exist for debugging but are not part of normal use. Autopilot uses `autopilot_interval_seconds` (20s) and `autopilot_checkin_cycles` (3) from `config.json`.

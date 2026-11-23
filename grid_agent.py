@@ -5998,7 +5998,12 @@ f"16 capability groups: [bold]Computer Use[/] | [bold]Files[/] | [bold]Shell[/] 
                             elif sub == "goal":
                                 action, _, rest = arg.partition(" ")
                                 if action == "add" and rest.strip():
-                                    console.print(f"  [{M}]{Tools.life.add_goal(rest.strip())}[/]\n")
+                                    title = rest.strip()
+                                    goal_type = "once"
+                                    if title.lower().startswith("ongoing "):
+                                        goal_type = "ongoing"
+                                        title = title[8:].strip()
+                                    console.print(f"  [{M}]{Tools.life.add_goal(title, goal_type=goal_type)}[/]\n")
                                 elif action == "done" and rest.strip():
                                     console.print(f"  [{M}]{Tools.life.complete_goal(rest.strip())}[/]\n")
                                 else:

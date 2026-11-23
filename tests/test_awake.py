@@ -10,15 +10,21 @@ from grid_awake import (
 
 
 class FakeLife:
-    def __init__(self, goal=True, persona="TinaGrid"):
+    def __init__(self, goal=True, persona="TinaGrid", goal_type="once"):
         self.goal = (
-            {"id": "g-test", "title": "Test goal", "description": "Do the thing"}
+            {
+                "id": "g-test",
+                "title": "Test goal",
+                "description": "Do the thing",
+                "goal_type": goal_type,
+            }
             if goal else None
         )
         self.persona = persona
         self.cfg = {"autopilot_interval_seconds": 5, "autopilot_checkin_cycles": 3}
         self.events = []
         self.work = []
+        self.completed = []
 
     def identity(self):
         return {
@@ -41,9 +47,19 @@ class FakeLife:
     def list_goals(self, status="active"):
         return [self.goal] if self.goal else []
 
-    def add_goal(self, title, priority=3, **kwargs):
-        self.goal = {"id": "g-test", "title": title, "description": ""}
+    def add_goal(self, title, priority=3, goal_type="once", **kwargs):
+        self.goal = {
+            "id": "g-test",
+            "title": title,
+            "description": "",
+            "goal_type": goal_type,
+        }
         return f"Goal added: {title}"
+
+    def complete_goal(self, goal_id):
+        self.completed.append(goal_id)
+        self.goal = None
+        return f"Goal completed: {goal_id}"
 
     def can_act(self):
         return True
@@ -163,6 +179,17 @@ class AwakeTests(unittest.TestCase):
         orchestrator = FakeOrchestrator(memory=FakeMemory(), backend=FakeBackend())
         context = build_local_context(orchestrator, FakeLife())
         self.assertIn("omitted", context)
+
+    def test_autopilot_completes_one_shot_goal(self):
+        life = FakeLife()
+        orchestrator = FakeOrchestrator(response="done")
+        runner = AutopilotRunner(
+            life, orchestrator, FakeConsole(), {"mode": "read_only"}
+        )
+        result = runner.run()
+        self.assertIn("Autopilot complete", result)
+        self.assertEqual(life.completed, ["g-test"])
+        self.assertEqual(len(life.work), 1)
 
     def test_autopilot_stops_on_cancel(self):
         life = FakeLife()

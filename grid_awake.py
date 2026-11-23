@@ -221,7 +221,7 @@ def build_awake_prompt(life, objective: str, notes=None, context: str = "") -> s
         "Windows desktop.\n\n"
         f"{life.identity_text()}\n\n"
         f"Social presence: {social}\n"
-        "You have the full 70-tool GRID registry available. Use a tool when "
+        "You have the full 80-tool GRID registry available. Use a tool when "
         "it helps. You can search and load procedural skills with "
         "skill_search and skill_load; use skill_read for referenced files. "
         "Configured MCP tools are available through mcp_servers, mcp_tools "
@@ -233,9 +233,11 @@ def build_awake_prompt(life, objective: str, notes=None, context: str = "") -> s
         "end your answer with exactly one line:\n"
         "ASK_USER: <one clear question>\n"
         "The harness will ask them and carry the answer into the next cycle. "
-        "The harness will also ask the user before sensitive, external, "
-        "file-writing, hardware or dangerous actions; do not claim you "
-        "performed an action that was blocked. Keep the final answer short "
+        "After tools finish, answer the goal directly in the user's requested "
+        "format; do not paste raw tool output. If this is a one-shot task, "
+        "finish it in this cycle. The harness will also ask before sensitive, "
+        "external, file-writing, hardware or dangerous actions; do not claim "
+        "you performed an action that was blocked. Keep the final answer short "
         "and report what you actually did. If you are blocked, say exactly "
         "what you need."
     )
@@ -472,7 +474,7 @@ class AutopilotRunner(AwakeRunner):
         from grid_agent import M, M_DIM, Tools
 
         if focus:
-            self.life.add_goal(focus.strip(), priority=1)
+            self.life.add_goal(focus.strip(), priority=1, goal_type="once")
         goals = self.life.list_goals("active")
         if not goals:
             return "No active goals. Run /life <task> to start one."
@@ -505,6 +507,7 @@ class AutopilotRunner(AwakeRunner):
             )
 
         cycles = 0
+        self.completed = False
         try:
             while not self.token.is_set():
                 for message in self.life.pending_messages():
@@ -539,8 +542,40 @@ class AutopilotRunner(AwakeRunner):
                     border_style=M,
                     padding=(0, 1),
                 ))
-                self._work_once(goal)
+                response = self._work_once(goal)
                 if self.token.is_set():
+                    break
+
+                failed = response.startswith("[Autopilot error]") or response.startswith("[Blocked]")
+                if goal.get("goal_type", "once") == "once":
+                    if failed:
+                        self.console.print(Panel(
+                            "Goal needs attention. Back to manual.",
+                            border_style=M,
+                            padding=(0, 1),
+                        ))
+                        break
+                    self.life.complete_goal(goal["id"])
+                    remaining = self.life.list_goals("active")
+                    if not remaining:
+                        self.completed = True
+                        self.console.print(Panel(
+                            f"Goal complete: {goal['title']}",
+                            border_style=M,
+                            padding=(0, 1),
+                        ))
+                        break
+                    self.console.print(
+                        f"  [{M_DIM}]Goal complete; continuing with the next goal.[/]"
+                    )
+                    continue
+
+                if failed:
+                    self.console.print(Panel(
+                        "Goal needs attention. Back to manual.",
+                        border_style=M,
+                        padding=(0, 1),
+                    ))
                     break
 
                 if cycles % self.checkin_cycles == 0:
@@ -569,8 +604,10 @@ class AutopilotRunner(AwakeRunner):
             Tools.policy = None
 
         self.console.print(Panel(
-            "Autopilot stopped. Back to manual.",
+            "Autopilot complete. Back to manual."
+            if self.completed
+            else "Autopilot stopped. Back to manual.",
             border_style=M,
             padding=(0, 1),
         ))
-        return "Autopilot stopped."
+        return "Autopilot complete." if self.completed else "Autopilot stopped."

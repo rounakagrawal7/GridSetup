@@ -118,9 +118,17 @@ class LifeEngine:
                 approved BOOLEAN DEFAULT TRUE,
                 created_at TIMESTAMP,
                 updated_at TIMESTAMP,
-                last_worked_at TIMESTAMP
+                last_worked_at TIMESTAMP,
+                goal_type VARCHAR DEFAULT 'once'
             )
         """)
+        try:
+            self.conn.execute(
+                "ALTER TABLE life_goals ADD COLUMN IF NOT EXISTS "
+                "goal_type VARCHAR DEFAULT 'once'"
+            )
+        except Exception:
+            pass
         self.conn.execute("""
             CREATE TABLE IF NOT EXISTS life_commitments (
                 id VARCHAR PRIMARY KEY,
@@ -376,19 +384,24 @@ class LifeEngine:
         due_at: Optional[datetime] = None,
         created_by: str = "user",
         approved: bool = True,
+        goal_type: str = "once",
         now: Optional[datetime] = None,
     ) -> str:
         title = (title or "").strip()
         if not title:
             return "Error: goal title is required."
+        goal_type = (goal_type or "once").strip().lower()
+        if goal_type not in ("once", "ongoing"):
+            goal_type = "once"
         now = now or self.now_fn()
         goal_id = _new_id("g")
         self.conn.execute(
             """
             INSERT INTO life_goals
                 (id, title, description, status, priority, due_at,
-                 created_by, approved, created_at, updated_at, last_worked_at)
-            VALUES (?, ?, ?, 'active', ?, ?, ?, ?, ?, ?, NULL)
+                 created_by, approved, created_at, updated_at, last_worked_at,
+                 goal_type)
+            VALUES (?, ?, ?, 'active', ?, ?, ?, ?, ?, ?, NULL, ?)
             """,
             [
                 goal_id,
@@ -400,6 +413,7 @@ class LifeEngine:
                 bool(approved),
                 now,
                 now,
+                goal_type,
             ],
         )
         self._event("goal_added", f"Goal added: {title}", description, goal_id, now)
@@ -436,7 +450,8 @@ class LifeEngine:
             rows = self.conn.execute(
                 """
                 SELECT id, title, description, status, priority, due_at,
-                       created_by, approved, created_at, last_worked_at
+                       created_by, approved, created_at, last_worked_at,
+                       goal_type
                 FROM life_goals WHERE status = ?
                 ORDER BY priority ASC, created_at ASC
                 """,
@@ -446,13 +461,15 @@ class LifeEngine:
             rows = self.conn.execute(
                 """
                 SELECT id, title, description, status, priority, due_at,
-                       created_by, approved, created_at, last_worked_at
+                       created_by, approved, created_at, last_worked_at,
+                       goal_type
                 FROM life_goals ORDER BY priority ASC, created_at ASC
                 """
             ).fetchall()
         keys = [
             "id", "title", "description", "status", "priority", "due_at",
             "created_by", "approved", "created_at", "last_worked_at",
+            "goal_type",
         ]
         return [dict(zip(keys, row)) for row in rows]
 
@@ -487,7 +504,8 @@ class LifeEngine:
         for goal in goals:
             marker = "!" if not goal.get("approved") else "-"
             due = f"  due {goal['due_at']:%Y-%m-%d %H:%M}" if goal.get("due_at") else ""
-            lines.append(f" {marker} {goal['id']}  {goal['title']}{due}")
+            kind = f" [{goal.get('goal_type', 'once')}]"
+            lines.append(f" {marker} {goal['id']}  {goal['title']}{due}{kind}")
         return "\n".join(lines)
 
     # -- commitments -----------------------------------------------------
