@@ -242,6 +242,42 @@ python grid_mcp_server.py
 
 It exposes local system, file, DNS, web, document and skill tools to Claude Code, Codex, Cursor or another MCP client.
 
+### Use GRID from OpenCode
+
+OpenCode V2 can connect to GRID as a local MCP server:
+
+```powershell
+cd C:\repos\Grid_Agent\GridSetup
+.\install_opencode_mcp.ps1
+opencode
+```
+
+Then verify from another terminal, or with `/mcps` inside OpenCode:
+
+```powershell
+opencode mcp list
+# ✓ grid  connected
+```
+
+The installer creates a machine-specific `opencode.jsonc` from `opencode.example.jsonc` with your Python and GridSetup paths. Once connected, ask OpenCode:
+
+```text
+Use GRID to get my system info.
+Use GRID to search skills for osint and load osint-report.
+Use GRID to read README.md.
+Use GRID to fetch https://example.com and summarize it.
+```
+
+This bridge is **read-only**: system, files, documents, DNS, web, OSINT and skills. It does not expose `/life`, shell, writes, email, radio, satellite or hardware. The GRID MCP tools use GridSetup as their working directory; use absolute paths for files elsewhere.
+
+For a global install instead of project-local, run:
+
+```powershell
+opencode mcp add grid --global -- "$PWD\.venv\Scripts\python.exe" "$PWD\grid_mcp_server.py"
+```
+
+and add `"cwd": "C:\\repos\\Grid_Agent\\GridSetup"` to that server in `~/.config/opencode/opencode.jsonc`. OpenCode hot-reloads config; no restart is required.
+
 ### Optional tools
 
 | Tool | Install | Notes |
@@ -340,6 +376,7 @@ The `email` section must already have working SMTP settings. With `mode: "auto"`
 | `grid_context.py` | Optional Headroom context compression |
 | `grid_tray.py` | Optional tray host |
 | `install_autostart.ps1` / `uninstall_autostart.ps1` | Login autostart control |
+| `opencode.example.jsonc` / `install_opencode_mcp.ps1` | Connect OpenCode to GRID's MCP server |
 | `grid_agent_social.py` | Moltbook social agent platform |
 | `grid_google.py` / `grid_sheets.py` | Google Calendar & Sheets / Excel |
 | `install.py` | One-time setup — deps, models, config |

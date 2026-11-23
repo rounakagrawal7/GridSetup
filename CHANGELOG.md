@@ -18,6 +18,8 @@
   `skill_search`, `skill_load`, `skill_read`, and four built-in MIT skills.
 - MCP client (`mcp_servers`, `mcp_tools`, `mcp_call`) and a read-only GRID MCP
   server for Claude Code, Codex, Cursor and other clients.
+- OpenCode setup: `opencode.example.jsonc`, `install_opencode_mcp.ps1`, and
+  README instructions. Verified `opencode mcp list` shows `grid connected`.
 - `document_read` with optional MarkItDown for PDF/DOCX/XLSX/PPTX, plus local
   fallbacks for text, HTML, JSON, CSV, Excel and DOCX.
 - Optional `sherlock_scan`, `nuclei_scan` (requires `authorized`) and

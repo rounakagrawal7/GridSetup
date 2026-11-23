@@ -29,8 +29,24 @@ jobs:
       - name: Syntax check
         run: python -m compileall -q .
 
-      - name: Validate example config
-        run: python -c "import json; json.load(open('config.example.json', encoding='utf-8'))"
+      - name: Validate example configs
+        run: |
+          python -c "import json; json.load(open('config.example.json', encoding='utf-8'))"
+          python -c "import json; c=json.load(open('opencode.example.jsonc', encoding='utf-8')); assert c['mcp']['servers']['grid']['type'] == 'local'; print('opencode example OK')"
+
+      - name: Validate PowerShell scripts
+        shell: pwsh
+        run: |
+          $files = @("run.ps1", "install_autostart.ps1", "uninstall_autostart.ps1", "install_opencode_mcp.ps1")
+          foreach ($file in $files) {
+            $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path $file), [ref]$null, [ref]$errors) | Out-Null
+            if ($errors.Count -gt 0) {
+              $errors | ForEach-Object { Write-Error "$file: $($_.Message)" }
+              exit 1
+            }
+            Write-Host "PASS $file"
+          }
 
       - name: Install import-test dependencies
         run: |
