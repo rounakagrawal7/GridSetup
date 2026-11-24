@@ -1,6 +1,6 @@
 # ADR-0001: GRID v3 and the local life loop
 
-**Status:** accepted, in progress
+**Status:** accepted, shipped in v3.0
 **Date:** 2026-11-24
 **Owners:** GRID maintainers
 

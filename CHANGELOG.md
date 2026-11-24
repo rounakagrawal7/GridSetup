@@ -1,6 +1,6 @@
 ﻿# Changelog
 
-## v3.0 - GRID Life (in progress)
+## v3.0 - GRID Life
 
 - `/life` is autonomous autopilot: one command, Esc twice returns to manual.
   GRID greets, reports each cycle, asks `ASK_USER` follow-ups and checks in
@@ -30,9 +30,11 @@
 - Permission policy covers all 80 tools with `ask`, `auto` and `read_only`
   modes, session approvals and `auto_approve` for external actions.
 - Double-Esc cancellation works across streaming, tool steps and `run_command`.
-- 70 tests and 49 routing eval cases cover the life loop, persona sync,
+- 76 tests and 49 routing eval cases cover the life loop, persona sync,
   permissions, cancellation, autopilot, local context, skills, MCP, documents,
   optional tools and tray.
+- Remaining non-goals: real-model acceptance evals and optional L2/L3 desktop
+  senses (screen OCR, microphone).
 
 ## v2.0.1 - clean run
 

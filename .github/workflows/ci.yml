@@ -51,7 +51,7 @@ jobs:
       - name: Install import-test dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install rich requests beautifulsoup4 duckdb numpy pillow opencv-python-headless pyyaml
+          python -m pip install rich requests beautifulsoup4 duckdb numpy pillow opencv-python-headless pyyaml python-docx
 
       - name: Import and tool registry
         run: python -c "import grid_agent; print('tools', len(grid_agent.Tools.registry)); assert len(grid_agent.Tools.registry) >= 70"

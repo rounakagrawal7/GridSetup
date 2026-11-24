@@ -119,6 +119,11 @@ CONFIG_FILE = "config.json"
 OLLAMA_PORT = 11434
 OLLAMA_NUM_CTX = 16384
 LMSTUDIO_PORT = 1234
+CAPABILITY_GROUPS = [
+    "Computer Use", "Files", "Shell", "Web", "Network", "Netcat",
+    "System", "Data & Code", "DB", "OSINT", "Comms", "Vision",
+    "Social", "Radio", "Satellite", "Microcontroller",
+]
 MAX_TOOL_TURNS = 5
 REFS_DIR = "refs"
 PERSONA_FILE = "grid_persona.md"
@@ -4059,8 +4064,8 @@ class GridOrchestrator:
              "Use delete_skill to remove skills the user no longer wants. "
              "Use list_skills to show all existing skills.\n\n"
              "TOOL AWARENESS: When asked about your capabilities, do NOT list every tool. "
-              "Give a concise summary of the 14 categories (Computer Use, Files, Shell, Web, Network, "
-              "Netcat Suite, System, Data/Code, Database, OSINT, Communication, Computer Vision, Social, Radio) and offer to "
+             f"Give a concise summary of the {len(CAPABILITY_GROUPS)} categories "
+             f"({', '.join(CAPABILITY_GROUPS)}) and offer to "
              "provide details on any specific category.\n\n"
         )
 
@@ -5578,11 +5583,10 @@ def main(argv=None):
                 border_style=M,
             ))
             console.print()
+            group_line = " | ".join(f"[bold]{group}[/]" for group in CAPABILITY_GROUPS)
             welcome_msg = (
-                f"[bold {M}]GRID v3[/] — OSINT, networking, automation.\n"
-f"16 capability groups: [bold]Computer Use[/] | [bold]Files[/] | [bold]Shell[/] | "
-             f"[bold]Web[/] | [bold]Network[/] | [bold]Netcat[/] | [bold]System[/] | "
-             f"[bold]Data & Code[/] | [bold]DB[/] | [bold]OSINT[/] | [bold]Comms[/] | [bold]Vision[/] | [bold]Social[/] | [bold]Radio[/] | [bold]Satellite[/].\n"
+                f"[bold {M}]GRID v3[/] \u2014 OSINT, networking, automation.\n"
+                f"{len(CAPABILITY_GROUPS)} capability groups: {group_line}.\n"
                 f"Type [bold {M}]/tools[/] for details or just tell me what you need."
             )
             console.print(Panel.fit(welcome_msg, border_style="dim"))
