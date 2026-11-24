@@ -139,6 +139,25 @@ private fun App(baseUrl: String, token: String) {
     var threadId by remember { mutableStateOf(GridAgentClient.newThreadId()) }
     val client = remember { GridAgentClient(baseUrl, token) }
 
+    LaunchedEffect(baseUrl, token) {
+        if (token.isBlank()) {
+            status = "Token missing"
+            return@LaunchedEffect
+        }
+        val online = withContext(Dispatchers.IO) { apiHealthy(baseUrl, token) }
+        if (!online) {
+            status = "API offline"
+            if (items.none { it is Item.Error && it.message.startsWith("GRID API is offline") }) {
+                items.add(
+                    Item.Error(
+                        "GRID API is offline at $baseUrl.\n" +
+                            "Start it with: python grid_agent.py --api --no-input"
+                    )
+                )
+            }
+        }
+    }
+
     fun handle(event: GridEvent) {
         when (event) {
             is GridEvent.RunStarted -> {
@@ -215,8 +234,9 @@ private fun App(baseUrl: String, token: String) {
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (error: Exception) {
-                items.add(Item.Error(error.message ?: error.toString()))
-                status = "Error"
+                val message = connectionAwareMessage(error, baseUrl)
+                items.add(Item.Error(message))
+                status = if (message.startsWith("GRID API is offline")) "API offline" else "Error"
             } finally {
                 busy = false
             }
@@ -573,6 +593,40 @@ private fun Composer(
             }
         }
     }
+}
+
+private fun apiHealthy(baseUrl: String, token: String): Boolean {
+    return try {
+        val client = HttpClient.newBuilder()
+            .connectTimeout(java.time.Duration.ofSeconds(2))
+            .build()
+        val request = HttpRequest.newBuilder()
+            .uri(URI.create("$baseUrl/api/v1/health"))
+            .header("Authorization", "Bearer $token")
+            .timeout(java.time.Duration.ofSeconds(3))
+            .GET()
+            .build()
+        client.send(request, HttpResponse.BodyHandlers.ofString()).statusCode() == 200
+    } catch (_: Exception) {
+        false
+    }
+}
+
+private fun connectionAwareMessage(error: Throwable, baseUrl: String): String {
+    var current: Throwable? = error
+    while (current != null) {
+        val text = current.message.orEmpty()
+        if (
+            current is java.net.ConnectException ||
+            text.contains("Connection refused", ignoreCase = true) ||
+            text.contains("Failed to connect", ignoreCase = true)
+        ) {
+            return "GRID API is offline at $baseUrl.\n" +
+                "Start it with: python grid_agent.py --api --no-input"
+        }
+        current = current.cause
+    }
+    return error.message ?: error.toString()
 }
 
 private fun postApproval(
