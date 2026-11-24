@@ -65,6 +65,7 @@ import java.net.http.HttpResponse
 import java.nio.file.Files
 import java.nio.file.Path
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -466,6 +467,11 @@ private fun ApprovalCard(
     onApprove: () -> Unit,
     onDeny: () -> Unit,
 ) {
+    var armed by remember(approval.id) { mutableStateOf(false) }
+    LaunchedEffect(approval.id) {
+        delay(600)
+        armed = true
+    }
     Card(
         colors = CardDefaults.cardColors(containerColor = Color(0xFF231E10)),
         modifier = Modifier.fillMaxWidth(),
@@ -491,10 +497,11 @@ private fun ApprovalCard(
                 Row {
                     Button(
                         onClick = onApprove,
+                        enabled = armed,
                         colors = ButtonDefaults.buttonColors(containerColor = GridGreen, contentColor = Color.Black),
                     ) { Text("Approve") }
                     Spacer(Modifier.width(8.dp))
-                    OutlinedButton(onClick = onDeny) { Text("Deny") }
+                    OutlinedButton(onClick = onDeny, enabled = armed) { Text("Deny") }
                 }
             }
         }
