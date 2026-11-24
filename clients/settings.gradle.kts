@@ -7,6 +7,10 @@ pluginManagement {
     }
 }
 
+plugins {
+    id("org.gradle.toolchains.foojay-resolver-convention") version "1.0.0"
+}
+
 dependencyResolutionManagement {
     repositories {
         mavenCentral()
@@ -16,4 +20,4 @@ dependencyResolutionManagement {
 }
 
 rootProject.name = "grid-clients"
-include(":shared", ":desktopApp")
+include(":shared", ":desktopApp", ":androidApp")

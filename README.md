@@ -390,9 +390,9 @@ Config:
 }
 ```
 
-### Kotlin desktop client (early)
+### Kotlin clients (desktop + Android)
 
-The first Compose Desktop shell lives under `clients/` and talks to `--api` over AG-UI:
+The Compose Desktop shell and Android companion live under `clients/` and talk to `--api` over AG-UI.
 
 ```powershell
 # terminal 1: host
@@ -403,15 +403,25 @@ cd clients
 .\gradlew.bat :desktopApp:run
 ```
 
-The app finds the token at `../run/api_token`, `run/api_token`, or `GRID_API_TOKEN`; pass `--url` or `--token-file` to override. It renders user/assistant messages, live tool cards, REA report artifacts, and approval requests. The shared module wraps the AG-UI Kotlin client behind `GridAgentClient`, so the UI is insulated from SDK changes.
+The desktop finds the token at `../run/api_token`, `run/api_token`, or `GRID_API_TOKEN`; pass `--url` or `--token-file` to override. It renders user/assistant messages, live tool cards, REA report artifacts, and approval requests.
 
-The AG-UI Kotlin SDK is compiled for Java 21; the Gradle build uses the Android Studio JBR (Java 25) in `clients/gradle.properties`. Android is the next target after the desktop shell.
+Android:
+
+```powershell
+cd clients
+.\gradlew.bat :androidApp:assembleDebug
+adb install -r androidApp\build\outputs\apk\debug\androidApp-debug.apk
+```
+
+On first launch, enter the host URL and paste the contents of `run/api_token`. The token is encrypted with an Android Keystore AES/GCM key. The default URL is `http://10.0.2.2:8771` for the emulator. For a physical device, set `api.host` to `0.0.0.0` in `config.json` (LAN exposure; token still required), restart `--api`, and use `http://<computer-LAN-IP>:8771`. Cleartext HTTP is allowed for this development build.
+
+The AG-UI Kotlin SDK is compiled for Java 21; the Gradle build uses the Android Studio JBR for the daemon and downloads a Java 21 toolchain for compilation. `clients/local.properties` must point at the Android SDK (`sdk.dir`).
 
 | Path | Purpose |
 |---|---|
-| `clients/shared/` | KMP client wrapper and `GridEvent` model |
+| `clients/shared/` | KMP client wrapper, `GridEvent` model, SSE contract test |
 | `clients/desktopApp/` | Compose Desktop UI |
-| `clients/shared/src/jvmTest/` | SSE contract test against the Python event shape |
+| `clients/androidApp/` | Android Compose companion + Keystore token store |
 
 ### Context compression
 

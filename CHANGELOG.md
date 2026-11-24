@@ -33,6 +33,10 @@
   the Python SSE frames.
 - Forced `kotlinx-datetime` 0.6.2 on the desktop runtime because the AG-UI SDK
   still calls `Clock.System`, while Compose Material3 1.9 resolves 0.7.x.
+- Android companion: `androidApp` uses the Android-KMP library plugin in
+  `shared`, Compose Material3, an encrypted Android Keystore token store, chat
+  timeline, tool cards, REA artifact paths, and approval buttons. The debug APK
+  builds with AGP 9.3.1 and compileSdk 36.
 
 ## v3.1 - always alive
 

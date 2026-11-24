@@ -1,11 +1,28 @@
+import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+
 plugins {
     kotlin("multiplatform")
     kotlin("plugin.serialization")
+    id("com.android.kotlin.multiplatform.library")
 }
 
 kotlin {
-    jvmToolchain(25)
-    jvm()
+    jvmToolchain(21)
+
+    jvm {
+        compilerOptions {
+            jvmTarget.set(JvmTarget.JVM_21)
+        }
+    }
+
+    android {
+        namespace = "ai.grid.shared"
+        compileSdk = 36
+        minSdk = 26
+        compilerOptions {
+            jvmTarget.set(JvmTarget.JVM_21)
+        }
+    }
 
     sourceSets {
         commonMain.dependencies {

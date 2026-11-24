@@ -193,6 +193,28 @@ foundation:
 - Pairing tests cover code expiry, bad token, revoked device and scope denial.
 - `--check` and the existing 137 tests stay green.
 
+## Implementation note (2026-11-25)
+
+Landed:
+
+- `--api` AG-UI 1.0 host over HTTP+SSE with bearer auth, thread storage, live
+  tool events, approval requests and REA report endpoints;
+- shared KMP `GridAgentClient`/`GridEvent` wrapper with an SSE contract test;
+- Compose Desktop shell with chat, timeline, tool cards, REA artifacts and
+  approvals;
+- Android companion with encrypted Keystore token storage, host setup screen,
+  chat, tool cards, REA artifact paths and approvals;
+- Android-KMP library plugin (`com.android.kotlin.multiplatform.library`) and a
+  debug APK build on compileSdk 36.
+
+Still open:
+
+- `findings.json` and `coverage-ledger.json` for REA;
+- pairing codes, scoped device sessions and revocation (manual token entry is
+  the current bootstrap);
+- desktop thread replay from `/api/v1/threads`;
+- local TTS, native-app teardown and build-from-blueprint.
+
 ## References
 
 - AG-UI protocol and SDKs: https://github.com/ag-ui-protocol/ag-ui
