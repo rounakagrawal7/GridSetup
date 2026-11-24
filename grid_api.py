@@ -253,6 +253,7 @@ class GridAPIServer:
             "backend": getattr(backend, "type", ""),
             "threads": len(self.threads.summaries()),
             "rea_reports": len(self._rea_reports()),
+            "runtime": getattr(self.runtime, "__name__", ""),
         }
 
     def _rea_reports(self) -> List[Dict[str, Any]]:
@@ -322,6 +323,7 @@ class GridAPIServer:
                     "decision": "",
                     "created": time.time(),
                 }
+            self._audit(f"ask {approval_id} {tool_name} {risk}")
             stream.send(
                 {
                     "type": "CUSTOM",
@@ -337,9 +339,20 @@ class GridAPIServer:
             approved = waiter.wait(timeout=APPROVAL_TIMEOUT_SECONDS)
             with self._approvals_lock:
                 record = self._approvals.pop(approval_id, {})
-            return "yes" if approved and record.get("decision") == "approve" else "no"
+            decision = "yes" if approved and record.get("decision") == "approve" else "no"
+            self._audit(f"result {approval_id} {decision} timeout={not approved}")
+            return decision
 
         return ask
+
+    @staticmethod
+    def _audit(message: str) -> None:
+        try:
+            RUN_DIR.mkdir(parents=True, exist_ok=True)
+            with open(RUN_DIR / "api_approvals.log", "a", encoding="utf-8") as handle:
+                handle.write(f"{_now()} {message}\n")
+        except OSError:
+            pass
 
     def _handle_run(self, body: Dict[str, Any], handler: "BaseHTTPRequestHandler") -> None:
         messages = body.get("messages")
@@ -463,6 +476,7 @@ class GridAPIServer:
                 return 404, {"ok": False, "error": "approval not found"}
             record["decision"] = decision
             record["event"].set()
+        self._audit(f"decision {approval_id} {decision}")
         return 200, {"ok": True, "approvalId": approval_id, "decision": decision}
 
     # ── HTTP plumbing ────────────────────────────────────────

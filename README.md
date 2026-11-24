@@ -390,6 +390,29 @@ Config:
 }
 ```
 
+### Kotlin desktop client (early)
+
+The first Compose Desktop shell lives under `clients/` and talks to `--api` over AG-UI:
+
+```powershell
+# terminal 1: host
+python grid_agent.py --api --no-input
+
+# terminal 2: desktop
+cd clients
+.\gradlew.bat :desktopApp:run
+```
+
+The app finds the token at `../run/api_token`, `run/api_token`, or `GRID_API_TOKEN`; pass `--url` or `--token-file` to override. It renders user/assistant messages, live tool cards, REA report artifacts, and approval requests. The shared module wraps the AG-UI Kotlin client behind `GridAgentClient`, so the UI is insulated from SDK changes.
+
+The AG-UI Kotlin SDK is compiled for Java 21; the Gradle build uses the Android Studio JBR (Java 25) in `clients/gradle.properties`. Android is the next target after the desktop shell.
+
+| Path | Purpose |
+|---|---|
+| `clients/shared/` | KMP client wrapper and `GridEvent` model |
+| `clients/desktopApp/` | Compose Desktop UI |
+| `clients/shared/src/jvmTest/` | SSE contract test against the Python event shape |
+
 ### Context compression
 
 Optional Headroom support compresses only non-system history/tool messages; the system prompt and tool names stay intact:
@@ -473,6 +496,7 @@ The `email` section must already have working SMTP settings. With `mode: "auto"`
 | `grid_awake.py` | Autopilot, step display and double-Esc cancel |
 | `grid_resident.py` | Always-on resident, loopback control surface and app handoff |
 | `grid_api.py` | Local AG-UI HTTP/SSE API for desktop and Android clients |
+| `clients/` | Kotlin Multiplatform client + Compose Desktop shell |
 | `tools/` | Optional profile backfill, pilot harness and boot-window logger |
 | `grid_permissions.py` | Ask/auto/read-only policy for autonomous tool use |
 | `grid_docs.py` | `document_read` + optional MarkItDown |

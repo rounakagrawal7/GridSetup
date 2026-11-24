@@ -26,6 +26,13 @@ pb_migrations/
 run/
 logs/
 
+# Kotlin/Gradle clients
+clients/.gradle/
+clients/.kotlin/
+clients/build/
+clients/*/build/
+clients/local.properties
+
 # Debug / temp inspection artifacts (repo-root only; tests/ is tracked)
 /test_*.py
 home_inspect.txt
