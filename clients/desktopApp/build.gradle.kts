@@ -1,3 +1,5 @@
+import org.gradle.jvm.toolchain.JavaLanguageVersion
+
 plugins {
     kotlin("jvm")
     id("org.jetbrains.compose")
@@ -7,6 +9,14 @@ plugins {
 kotlin {
     jvmToolchain(21)
 }
+
+val java21Home = javaToolchains
+    .launcherFor { languageVersion.set(JavaLanguageVersion.of(21)) }
+    .get()
+    .metadata
+    .installationPath
+    .asFile
+    .absolutePath
 
 dependencies {
     implementation(project(":shared"))
@@ -27,5 +37,6 @@ configurations.all {
 compose.desktop {
     application {
         mainClass = "ai.grid.desktop.MainKt"
+        javaHome = java21Home
     }
 }

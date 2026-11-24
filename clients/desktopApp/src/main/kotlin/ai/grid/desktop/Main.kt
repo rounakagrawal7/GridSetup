@@ -45,12 +45,14 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.isShiftPressed
 import androidx.compose.ui.input.key.key
-import androidx.compose.ui.input.key.onKeyEvent
+import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -133,6 +135,7 @@ private fun App(baseUrl: String, token: String) {
     val scope = rememberCoroutineScope()
     val items = remember { mutableStateListOf<Item>() }
     val listState = rememberLazyListState()
+    val inputFocus = remember { FocusRequester() }
     var input by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
     var status by remember { mutableStateOf("Ready") }
@@ -156,6 +159,10 @@ private fun App(baseUrl: String, token: String) {
                 )
             }
         }
+    }
+
+    LaunchedEffect(Unit) {
+        inputFocus.requestFocus()
     }
 
     fun handle(event: GridEvent) {
@@ -306,6 +313,7 @@ private fun App(baseUrl: String, token: String) {
                 input = input,
                 busy = busy,
                 enabled = token.isNotBlank(),
+                focusRequester = inputFocus,
                 onInput = { input = it },
                 onSend = { send() },
             )
@@ -551,6 +559,7 @@ private fun Composer(
     input: String,
     busy: Boolean,
     enabled: Boolean,
+    focusRequester: FocusRequester,
     onInput: (String) -> Unit,
     onSend: () -> Unit,
 ) {
@@ -558,7 +567,7 @@ private fun Composer(
         OutlinedTextField(
             value = input,
             onValueChange = onInput,
-            modifier = Modifier.weight(1f).onKeyEvent { event ->
+            modifier = Modifier.weight(1f).focusRequester(focusRequester).onPreviewKeyEvent { event ->
                 if (
                     enabled && !busy &&
                     event.type == KeyEventType.KeyDown &&
@@ -657,7 +666,13 @@ private fun openPath(path: String) {
             Desktop.getDesktop().open(file)
         }
     } catch (_: Exception) {
-        // The report stays on disk even when no desktop handler is registered.
+        try {
+            if (System.getProperty("os.name").lowercase().contains("win")) {
+                ProcessBuilder("notepad.exe", path).start()
+            }
+        } catch (_: Exception) {
+            // The report stays on disk even when no handler is registered.
+        }
     }
 }
 
