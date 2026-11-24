@@ -415,7 +415,7 @@ adb install -r androidApp\build\outputs\apk\debug\androidApp-debug.apk
 
 On first launch, enter the host URL and paste the contents of `run/api_token`. The token is encrypted with an Android Keystore AES/GCM key. The default URL is `http://10.0.2.2:8771` for the emulator. For a physical device, set `api.host` to `0.0.0.0` in `config.json` (LAN exposure; token still required), restart `--api`, and use `http://<computer-LAN-IP>:8771`. Cleartext HTTP is allowed for this development build.
 
-The AG-UI Kotlin SDK is compiled for Java 21; the Gradle build uses the Android Studio JBR for the daemon and downloads a Java 21 toolchain for compilation. `clients/local.properties` must point at the Android SDK (`sdk.dir`).
+The AG-UI Kotlin SDK is compiled for Java 21. Gradle uses the foojay toolchain resolver to download a Java 21 toolchain for compilation and runs; `clients/local.properties` must point at the Android SDK (`sdk.dir`).
 
 | Path | Purpose |
 |---|---|
