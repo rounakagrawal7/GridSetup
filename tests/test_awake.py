@@ -1,3 +1,4 @@
+import time
 import unittest
 
 from grid_awake import (
@@ -102,6 +103,16 @@ class FakeConsole:
         pass
 
 
+class FakeBackend:
+    def __init__(self, reply="I'm here."):
+        self.reply = reply
+        self.calls = []
+
+    def chat(self, messages, temperature=0.7):
+        self.calls.append(messages)
+        return self.reply
+
+
 class AwakeTests(unittest.TestCase):
     def test_cancel_token(self):
         token = CancelToken()
@@ -202,6 +213,134 @@ class AwakeTests(unittest.TestCase):
         result = runner.run()
         self.assertIn("Autopilot stopped", result)
         self.assertIn("cancelled", [event[0] for event in life.events])
+
+    def test_idle_chat_does_not_call_tools(self):
+        life = FakeLife(goal=False)
+        orchestrator = FakeOrchestrator()
+        orchestrator.backend = FakeBackend("I'm well, and thinking about the iLog.")
+        runner = AutopilotRunner(
+            life, orchestrator, FakeConsole(), {"mode": "read_only"}
+        )
+        reply = runner._chat_reply("how are you")
+        self.assertIn("well", reply)
+        self.assertEqual(runner._extract_goal(reply), "")
+        self.assertEqual(len(orchestrator.prompts), 0)
+
+    def test_idle_chat_can_propose_a_goal(self):
+        life = FakeLife(goal=False)
+        orchestrator = FakeOrchestrator()
+        orchestrator.backend = FakeBackend("On it.\nGOAL: Review the iLog")
+        runner = AutopilotRunner(
+            life, orchestrator, FakeConsole(), {"mode": "read_only"}
+        )
+        reply = runner._chat_reply("please review the iLog")
+        self.assertEqual(runner._extract_goal(reply), "Review the iLog")
+
+    def test_self_direction_adds_one_goal(self):
+        life = FakeLife(goal=False)
+        orchestrator = FakeOrchestrator()
+        orchestrator.backend = FakeBackend("GOAL: Tidy my notes")
+        runner = AutopilotRunner(
+            life, orchestrator, FakeConsole(), {"mode": "read_only"}
+        )
+        self.assertTrue(runner._propose_goal())
+        self.assertEqual(life.goal["title"], "Tidy my notes")
+
+    def test_self_direction_phrases(self):
+        runner = AutopilotRunner(
+            FakeLife(), FakeOrchestrator(), FakeConsole(), {"mode": "read_only"}
+        )
+        self.assertTrue(runner._wants_self_direction("pick your next goal"))
+        self.assertTrue(runner._wants_self_direction("pick your goal yourself"))
+        self.assertTrue(runner._wants_self_direction("you choose"))
+        self.assertFalse(runner._wants_self_direction("have you selected any goals?"))
+        self.assertFalse(runner._wants_self_direction("which goal did you pick?"))
+
+    def test_self_direction_falls_back_when_model_misses_format(self):
+        life = FakeLife(goal=False)
+        orchestrator = FakeOrchestrator()
+        orchestrator.backend = FakeBackend("I might organize my notes.")
+        runner = AutopilotRunner(
+            life, orchestrator, FakeConsole(), {"mode": "read_only"}
+        )
+        self.assertTrue(runner._propose_goal(fallback=True))
+        self.assertIn("Review recent memory", life.goal["title"])
+
+    def test_budget_rest_is_not_an_exit(self):
+        life = FakeLife()
+        life.can_act = lambda: False
+        runner = AutopilotRunner(
+            life, FakeOrchestrator(), FakeConsole(), {"mode": "read_only"}
+        )
+        runner.token = CancelToken()
+        waited = []
+        runner._wait = lambda seconds: waited.append(seconds)
+        self.assertTrue(runner._rest_if_needed())
+        self.assertFalse(runner.token.is_set())
+        self.assertEqual(waited, [300])
+
+    def test_resident_never_blocks_on_input(self):
+        from grid_awake import ResidentAutopilot
+
+        runner = ResidentAutopilot(
+            FakeLife(), FakeOrchestrator(), FakeConsole(), {"mode": "read_only"}
+        )
+        runner.token = CancelToken()
+        self.assertEqual(runner._ask_user("anything?"), "")
+        self.assertFalse(runner.token.is_set())
+        self.assertEqual(runner._approve("run_command", "dir", "dangerous"), "n")
+
+    def test_resident_leaves_messages_for_the_human(self):
+        from grid_awake import ResidentAutopilot
+
+        life = FakeLife()
+        marked = []
+        life.pending_messages = lambda: [
+            {"id": "m-1", "summary": "Commitment due", "detail": "Do the thing"}
+        ]
+        life.mark_delivered = lambda event_id: marked.append(event_id)
+        runner = ResidentAutopilot(
+            life, FakeOrchestrator(), FakeConsole(), {"mode": "read_only"}
+        )
+        runner._deliver_pending()
+        self.assertEqual(marked, [])
+        self.assertIn("m-1", runner._seen_messages)
+
+    def test_resident_startup_grace_delays_self_direction(self):
+        from grid_awake import ResidentAutopilot
+
+        life = FakeLife(goal=False)
+        orchestrator = FakeOrchestrator()
+        runner = ResidentAutopilot(
+            life, orchestrator, FakeConsole(), {"mode": "read_only"}
+        )
+        runner.startup_grace_until = time.time() + 60
+        waited = []
+        runner._wait = lambda seconds: waited.append(seconds)
+        runner._idle()
+        self.assertTrue(waited)
+        self.assertEqual(orchestrator.prompts, [])
+        self.assertEqual(runner.startup_grace_until, 0.0)
+
+    def test_runner_uses_the_live_tools_class(self):
+        class LiveTools:
+            cancel_token = None
+            policy = None
+
+        runner = AutopilotRunner(
+            FakeLife(),
+            FakeOrchestrator(),
+            FakeConsole(),
+            {"mode": "read_only"},
+            tools=LiveTools,
+        )
+        self.assertIs(runner._tools(), LiveTools)
+        runner._start()
+        self.assertIs(LiveTools.cancel_token, runner.token)
+        self.assertIs(LiveTools.policy, runner.policy)
+        runner._stop()
+        self.assertIsNone(LiveTools.cancel_token)
+        self.assertIsNone(LiveTools.policy)
 
 
 if __name__ == "__main__":

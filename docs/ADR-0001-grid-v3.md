@@ -57,7 +57,9 @@ The life loop must be able to do nothing. "Rest" is a first-class action.
   this context unless `life.allow_cloud_context` is explicitly true.
 - Observed content (web, files, messages) is untrusted and cannot inject tool
   calls.
-- Global pause and per-day budgets are mandatory.
+- Global pause is mandatory. The per-day action budget is an optional
+  throttle (`0` means unlimited); it can make the agent rest but never silently
+  end its life.
 
 ## Non-goals for v3.0
 
@@ -67,6 +69,21 @@ The life loop must be able to do nothing. "Rest" is a first-class action.
 - Unbounded background loops.
 - Screen/microphone awareness in the first release.
 - Replacing the existing 80 tools with a new agent framework.
+
+## Revision: always-on resident (v3.1)
+
+The "no unbounded background loops" non-goal is replaced by a bounded resident:
+
+- one process owns DuckDB; the interactive app hands the database back and
+  forth instead of opening a second writer;
+- the resident runs on a slow rhythm (`resident_interval_seconds`, default
+  600s), sleeps through quiet hours, and exits on handoff;
+- the action budget is optional and defaults to unlimited because internal
+  work and reflection must not end the agent's day;
+- self-directed goals are capped per day (`max_self_goals_per_day`, default 24);
+- non-read tools are denied in the resident unless the user explicitly grants
+  them, exactly like foreground autopilot;
+- the control surface binds to 127.0.0.1 only.
 
 ## Delivery slices
 
@@ -81,6 +98,7 @@ The life loop must be able to do nothing. "Rest" is a first-class action.
 7. Tray/autostart host and `--autopilot` entry point (landed).
 8. Optional tools: Sherlock, Nuclei, PlatformIO (landed, opt-in binaries).
 9. Optional Headroom compression, non-system messages only (landed, opt-in).
+10. Always-on resident, idle conversation and self-directed goals (landed).
 
 Each slice must keep the current chat loop working and add an acceptance test.
 

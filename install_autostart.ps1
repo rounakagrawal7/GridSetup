@@ -1,4 +1,5 @@
 # Install GRID in the current user's Startup folder.
+# Installs the tray icon and the always-on GRID Life resident.
 $ErrorActionPreference = "Stop"
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 $pythonw = Join-Path $here ".venv\Scripts\pythonw.exe"
@@ -11,13 +12,25 @@ if (-not (Test-Path $pythonw)) {
     $pythonw = $cmd.Source
 }
 $startup = [Environment]::GetFolderPath("Startup")
-$shortcutPath = Join-Path $startup "GRID Tray.lnk"
 $shell = New-Object -ComObject WScript.Shell
-$shortcut = $shell.CreateShortcut($shortcutPath)
-$shortcut.TargetPath = $pythonw
-$shortcut.Arguments = "`"$here\grid_tray.py`""
-$shortcut.WorkingDirectory = $here
-$shortcut.Description = "GRID v3 tray"
-$shortcut.Save()
-Write-Host "Installed: $shortcutPath" -ForegroundColor Green
-Write-Host "GRID will appear in the notification area at your next login."
+
+$trayPath = Join-Path $startup "GRID Tray.lnk"
+$tray = $shell.CreateShortcut($trayPath)
+$tray.TargetPath = $pythonw
+$tray.Arguments = "`"$here\grid_tray.py`""
+$tray.WorkingDirectory = $here
+$tray.Description = "GRID v3 tray"
+$tray.Save()
+Write-Host "Installed: $trayPath" -ForegroundColor Green
+
+$residentPath = Join-Path $startup "GRID Life.lnk"
+$resident = $shell.CreateShortcut($residentPath)
+$resident.TargetPath = $pythonw
+$resident.Arguments = "`"$here\grid_agent.py`" --no-input --no-banner --resident"
+$resident.WorkingDirectory = $here
+$resident.Description = "GRID Life - always-on resident"
+$resident.Save()
+Write-Host "Installed: $residentPath" -ForegroundColor Green
+Write-Host "GRID Life will wake at your next login and keep its own clock."
+Write-Host "Logs: $here\logs\resident-YYYYMMDD.log"
+Write-Host "To relaunch the resident after the app exits, set life.resident_autostart=true in config.json."

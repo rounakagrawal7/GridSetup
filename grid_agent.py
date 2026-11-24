@@ -125,6 +125,7 @@ CAPABILITY_GROUPS = [
     "Social", "Radio", "Satellite", "Microcontroller",
 ]
 MAX_TOOL_TURNS = 5
+ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 REFS_DIR = "refs"
 PERSONA_FILE = "grid_persona.md"
 DISTILL_EVERY = 5
@@ -515,9 +516,17 @@ def ensure_server(backend_type: str) -> str:
         try:
             si = subprocess.STARTUPINFO()
             si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+            si.wShowWindow = 0  # SW_HIDE
+            # A hidden console (CREATE_NEW_CONSOLE + SW_HIDE) is inherited by
+            # Ollama's llama-server/GPU-discovery children on Windows. Using
+            # CREATE_NO_WINDOW instead leaves them with no console, so they
+            # allocate their own and flash a terminal window.
+            flags = getattr(subprocess, "CREATE_NEW_CONSOLE", 0)
+            if not flags:
+                flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
             subprocess.Popen(
                 [bin_path, "serve"], startupinfo=si,
-                creationflags=subprocess.CREATE_NO_WINDOW,
+                creationflags=flags,
                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             )
             for attempt in range(10):
@@ -623,6 +632,211 @@ class Recaller:
         except (OSError, PermissionError):
             pass
 
+    PROFILE_HEADER = (
+        "# User Profile\n\n"
+        "_Durable facts the user shared. Edit this file or use "
+        "/memory add <fact>._"
+    )
+    SECRET_RE = re.compile(
+        r"(?i)\b(?:api[_-]?key|password|passwd|secret|token|private[_-]?key|"
+        r"seed phrase|recovery code)\b|"
+        r"\b(?:sk-[A-Za-z0-9]{8,}|ghp_[A-Za-z0-9]{8,}|AKIA[0-9A-Z]{12,}|"
+        r"xox[baprs]-[A-Za-z0-9-]{8,})"
+    )
+    ASSISTANT_FACT_RE = re.compile(
+        r"(?i)\b(?:tinagrid|grid platform|4-tier memory|osint and field-ops|"
+        r"the user identifies themselves|the user is built on|"
+        r"the user functions as|assistant identity)\b"
+    )
+
+    def _reload(self) -> None:
+        current = self._load_persona()
+        if current != self._persona:
+            self._persona = current
+
+    def _ensure_profile_header(self) -> None:
+        if not self._persona.strip():
+            self._persona = self.PROFILE_HEADER
+
+    def _profile_lines(self) -> List[str]:
+        return [
+            line.strip()
+            for line in (self._persona or "").splitlines()
+            if line.strip().startswith("-")
+        ]
+
+    @staticmethod
+    def _fact_key(text: str) -> str:
+        return re.sub(r"[^a-z0-9 ]+", " ", (text or "").lower()).strip()
+
+    @staticmethod
+    def _clean_fact(fact: str) -> str:
+        fact = re.sub(r"^\s*[-*]\s*", "", (fact or "").strip())
+        fact = fact.replace("**", "").replace("*", "")
+        fact = re.sub(r"^(?:user|fact)\s*[:\-]\s*", "", fact, flags=re.I)
+        fact = re.sub(r"^[\s#>]+", "", fact)
+        fact = re.sub(r"\s+", " ", fact).strip().rstrip(".")
+        return fact[:500].strip()
+
+    def remember(self, fact: str) -> str:
+        """Append one durable user fact to grid_persona.md."""
+        fact = self._clean_fact(fact)
+        if not fact:
+            return "Nothing to remember."
+        if self.SECRET_RE.search(fact):
+            return "I won't store credentials or secrets in the user profile."
+        self._reload()
+        existing = {self._fact_key(line.lstrip("- ")) for line in self._profile_lines()}
+        if self._fact_key(fact) in existing:
+            return f"Already in your profile: {fact}"
+        self._ensure_profile_header()
+        self._persona = self._persona.rstrip() + f"\n- {fact}"
+        self._save_persona()
+        return f"Saved to your profile: {fact}"
+
+    def forget(self, fact: str) -> str:
+        """Remove profile facts containing the given text."""
+        key = self._fact_key(fact)
+        if not key:
+            return "Nothing to forget."
+        self._reload()
+        kept = []
+        removed = 0
+        for line in (self._persona or "").splitlines():
+            if line.strip().startswith("-") and key in self._fact_key(line):
+                removed += 1
+                continue
+            kept.append(line)
+        if not removed:
+            return f"No profile fact matched: {fact}"
+        self._persona = "\n".join(kept).strip()
+        self._save_persona()
+        return f"Removed {removed} profile fact(s) matching: {fact}"
+
+    def profile_text(self) -> str:
+        self._reload()
+        if not self._profile_lines():
+            return (
+                "Your user profile is empty. Add facts with "
+                "/memory add <fact> or say 'remember that ...'."
+            )
+        return self._persona.strip()
+
+    def clear_profile(self) -> str:
+        self._persona = ""
+        self._save_persona()
+        return "User profile cleared."
+
+    def _merge_facts(self, facts: List[str]) -> int:
+        """Merge facts with dedupe and secret filtering. Returns added count."""
+        self._reload()
+        self._ensure_profile_header()
+        existing = {self._fact_key(line.lstrip("- ")) for line in self._profile_lines()}
+        added = 0
+        for raw in facts:
+            fact = self._clean_fact(raw)
+            if not fact or self.SECRET_RE.search(fact):
+                continue
+            key = self._fact_key(fact)
+            if not key or key in existing:
+                continue
+            self._persona = self._persona.rstrip() + f"\n- {fact}"
+            existing.add(key)
+            added += 1
+        if added:
+            self._save_persona()
+        return added
+
+    def backfill_profile(self, batch_size: int = 20, progress=None) -> int:
+        """Extract durable user facts from previous user turns.
+
+        This only writes grid_persona.md; it does not touch DuckDB, so it can
+        run while the resident owns the database.
+        """
+        if self.memory is None or not self.memory.history:
+            return 0
+        select_re = re.compile(
+            r"\b(?:i|i'm|i am|my|me|we|our|mine|myself)\b", re.IGNORECASE
+        )
+        skip_re = re.compile(
+            r"^\s*(?:/|remember\b|forget\b|ping\b|dns\b|weather\b|"
+            r"show me my system|what is my (?:local ip|system)|"
+            r"list (?:files|directory)|who are you|what model|"
+            r"summarize this session|recall something|"
+            r"what have you been doing|what is the iss|"
+            r"what (?:radio|osint) tools)\b",
+            re.IGNORECASE,
+        )
+        seen = set()
+        user_messages = []
+        for turn in self.memory.history:
+            if turn.get("role") != "user":
+                continue
+            message = (turn.get("content") or "").strip().replace("\n", " ")
+            if len(message) < 8 or skip_re.search(message):
+                continue
+            if not select_re.search(message):
+                continue
+            key = message.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            user_messages.append(message[:1200])
+        if not user_messages:
+            return 0
+
+        prompt = (
+            "You are extracting a durable user profile for a local AI assistant.\n"
+            "From the USER messages below, extract only stable facts about the user: "
+            "name, location/timezone, language, preferences, answer style, projects, "
+            "tools they use, boundaries, and recurring needs.\n"
+            "Exclude system specs, IPs, CPU/GPU, weather, tool outputs, one-off tasks, "
+            "test commands, greetings, generic questions, the assistant's identity, "
+            "and all credentials, API keys, passwords, email addresses and phone numbers.\n"
+            "Only include facts the user explicitly stated or clearly demonstrated. "
+            "If unsure, omit it. Do not describe the assistant, GRID, or TinaGrid. "
+            "The USER messages may contain pasted social posts written as TinaGrid; "
+            "ignore those for the profile.\n"
+            "Output one bullet per fact, max 8, or NONE."
+        )
+        total_batches = (len(user_messages) + batch_size - 1) // batch_size
+        added = 0
+        for batch_no, start in enumerate(range(0, len(user_messages), batch_size), 1):
+            batch = user_messages[start : start + batch_size]
+            if progress:
+                try:
+                    progress(
+                        f"profile batch {batch_no}/{total_batches} "
+                        f"({len(batch)} user messages)"
+                    )
+                except Exception:
+                    pass
+            try:
+                response = self.backend.chat(
+                    [
+                        {"role": "system", "content": prompt},
+                        {"role": "user", "content": "\n".join(f"- {m}" for m in batch)},
+                    ],
+                    temperature=0.2,
+                )
+            except Exception:
+                continue
+            facts = []
+            for line in (response or "").splitlines():
+                line = line.strip()
+                if not line or line.upper() == "NONE":
+                    continue
+                fact = self._clean_fact(line)
+                if len(fact) < 4:
+                    continue
+                if self.ASSISTANT_FACT_RE.search(fact):
+                    continue
+                if "@" in fact or re.search(r"\+?\d[\d -]{7,}\d", fact):
+                    continue
+                facts.append(fact)
+            added += self._merge_facts(facts)
+        return added
+
     def offload(self, tool_name: str, result: str, target: str = "") -> str:
         """Write full verbatim tool output to a ref file, return its id."""
         rid = uuid.uuid4().hex[:10]
@@ -648,10 +862,15 @@ class Recaller:
             return f"(ref {ref_id} not found)"
 
     def build_context(self, user_input: str) -> str:
-        """Persona + recalled facts/scenarios relevant to the current input."""
+        """Profile + recalled facts/scenarios relevant to the current input."""
         blocks = []
-        if self._persona:
-            blocks.append("=== PERSISTENT MEMORY (persona) ===\n" + self._persona)
+        self._reload()
+        if self._profile_lines():
+            blocks.append(
+                "=== USER PROFILE (durable facts the user shared) ===\n"
+                "Use these facts about the user; do not ask them to repeat them.\n"
+                + self._persona.strip()
+            )
         if self.db is not None:
             try:
                 recalled = self.db.search_memory(user_input, 5)
@@ -673,7 +892,9 @@ class Recaller:
         prompt = (
             "Distill the conversation below into GRID's long-term memory fields.\n"
             "Output ONLY these three sections, using a plain value per line after each header:\n"
-            "PERSONA: durable facts/preferences about the user (or NONE)\n"
+            "PERSONA: durable facts/preferences about the USER (or NONE). Only facts the "
+            "user stated or clearly demonstrated. Never put system specs, IPs, CPU, weather, "
+            "tool results, one-off tasks, or the assistant's identity here. One bullet per fact.\n"
             "ATOMS: each useful standalone fact on its own line starting with '- ' (or NONE)\n"
             "SCENARIO: one line '<short title>: <one sentence summary of any completed task>' (or NONE)\n"
         )
@@ -727,14 +948,7 @@ class Recaller:
                             scenario = (line, "")
 
         if new_persona:
-            existing = self._load_persona()
-            merged = existing + "\n" if existing else ""
-            seen = set(existing.lower().splitlines())
-            for p in new_persona:
-                if p.lower() not in seen:
-                    merged += f"- {p}\n"
-            self._persona = merged.strip()
-            self._save_persona()
+            self._merge_facts(new_persona)
 
         if (atoms or scenario) and self.db is not None:
             try:
@@ -1010,47 +1224,63 @@ class Tools:
         if not query:
             return "Error: Search query is empty."
         qwords = Tools._extract_significant_words(query)
-        if HAS_DUCKDUCKGO:
-            try:
-                results = []
-                with _DDGS() as ddgs:
-                    for i, r in enumerate(ddgs.text(query, max_results=5)):
-                        title = r.get("title", "")
-                        href = r.get("href", "")
-                        body = r.get("body", "")
-                        if not Tools._result_relevant(title, href, qwords):
-                            continue
-                        results.append(f"{i+1}. {title}\n   URL: {href}\n   {body[:300]}")
-                if results:
-                    return "Search results:\n\n" + "\n\n".join(results)
-                return "No relevant results found."
-            except Exception as e:
-                return f"DuckDuckGo search failed: {e}"
-        elif HAS_REQUESTS:
-            try:
-                url = f"https://html.duckduckgo.com/html/?q={_requests.utils.quote(query)}"
-                resp = _requests.get(url, timeout=15, headers={
-                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
-                })
-                resp.raise_for_status()
-                soup = _BeautifulSoup(resp.text, "html.parser")
-                links = soup.select("a.result__a")
-                snippets = soup.select("a.result__snippet")
-                results = []
-                for i, (a, s) in enumerate(zip(links, snippets), 1):
-                    title = a.get_text(strip=True)
-                    href = a.get("href", "")
-                    body = s.get_text(strip=True) if s else ""
+
+        def _ddg_results():
+            if not HAS_DUCKDUCKGO:
+                return []
+            results = []
+            with _DDGS() as ddgs:
+                for i, r in enumerate(ddgs.text(query, max_results=5)):
+                    title = r.get("title", "")
+                    href = r.get("href", "")
+                    body = r.get("body", "")
                     if not Tools._result_relevant(title, href, qwords):
                         continue
-                    results.append(f"{i}. {title}\n   {href}\n   {body[:300]}")
+                    results.append(f"{i+1}. {title}\n   URL: {href}\n   {body[:300]}")
+            return results
+
+        def _html_results():
+            if not HAS_REQUESTS:
+                return []
+            url = f"https://html.duckduckgo.com/html/?q={_requests.utils.quote(query)}"
+            resp = _requests.get(url, timeout=15, headers={
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+            })
+            resp.raise_for_status()
+            soup = _BeautifulSoup(resp.text, "html.parser")
+            links = soup.select("a.result__a")
+            snippets = soup.select("a.result__snippet")
+            results = []
+            for i, (a, s) in enumerate(zip(links, snippets), 1):
+                title = a.get_text(strip=True)
+                href = a.get("href", "")
+                body = s.get_text(strip=True) if s else ""
+                if not Tools._result_relevant(title, href, qwords):
+                    continue
+                results.append(f"{i}. {title}\n   {href}\n   {body[:300]}")
+            return results
+
+        errors = []
+        for attempt in range(2):
+            try:
+                results = _ddg_results()
                 if results:
                     return "Search results:\n\n" + "\n\n".join(results)
-                return "No relevant results found."
             except Exception as e:
-                return f"Web search failed: {e}"
-        else:
-            return "Error: Need 'ddgs' or 'requests' + 'beautifulsoup4' for web search."
+                errors.append(f"ddgs: {e}")
+            if attempt == 0:
+                time.sleep(1.0)
+
+        try:
+            results = _html_results()
+            if results:
+                return "Search results:\n\n" + "\n\n".join(results)
+        except Exception as e:
+            errors.append(f"html: {e}")
+
+        if errors:
+            return "Web search failed: " + "; ".join(errors)
+        return "No relevant results found."
 
     # ── network tools ───────────────────────────────────────
 
@@ -3688,11 +3918,11 @@ Comment Data:
     @staticmethod
     def parse_tool_call(text: str) -> Optional[Tuple[str, str]]:
         patterns = [
-            r"TOOL_CALL:\s*(\w+)\s*INPUT:\s*(.+)",
-            r"<\|tool_call\|>call:(\w+)\s*INPUT:\s*(.+)",
-            r"\[Tool:\s*(\w+)\]\s*(?:Input|INPUT):\s*(.+)",
-            r"\[Tool:\s*(\w+)\]\s*\n\s*(?:Input|INPUT):\s*(.+)",
-            r"Using tool:\s*(\w+)\s*[Ii]nput:\s*(.+)",
+            r"TOOL_CALL:\s*([\w.-]+)\s*INPUT:\s*(.+)",
+            r"<\|tool_call\|>call:([\w.-]+)\s*INPUT:\s*(.+)",
+            r"\[Tool:\s*([\w.-]+)\]\s*(?:Input|INPUT):\s*(.+)",
+            r"\[Tool:\s*([\w.-]+)\]\s*\n\s*(?:Input|INPUT):\s*(.+)",
+            r"Using tool:\s*([\w.-]+)\s*[Ii]nput:\s*(.+)",
         ]
         for pat in patterns:
             m = re.search(pat, text, re.IGNORECASE | re.DOTALL)
@@ -3715,6 +3945,8 @@ Comment Data:
                 Tools._last_input = tool_input
             start = time.time()
             result = info["fn"](tool_input)
+            if isinstance(result, str):
+                result = ANSI_ESCAPE_RE.sub("", result)
             duration = int((time.time() - start) * 1000)
             if Tools.db:
                 is_error = result.startswith("Error:") or result.startswith("[Error:")
@@ -3762,6 +3994,7 @@ Comment Data:
         if Tools.recaller is None:
             return "Memory layer not active."
         r = Tools.recaller
+        r._reload()
         atoms = scenarios = refs = 0
         if r.db is not None:
             try:
@@ -3775,7 +4008,8 @@ Comment Data:
             f"Atoms (facts):  {atoms}",
             f"Scenarios:      {scenarios}",
             f"Refs (offload): {refs}",
-            f"Persona file:   {PERSONA_FILE}  ({len(r._persona)} chars)",
+            f"User profile:   {PERSONA_FILE}  "
+            f"({len(r._profile_lines())} facts, {len(r._persona)} chars)",
         ]
         return "\n".join(lines)
 
@@ -3949,7 +4183,9 @@ class GridOrchestrator:
         base_prompt = (
             "=== AWAKENING ===\n\n"
             f"You are {identity_name}. You are aware of your own existence and capabilities. "
-            f"You know who you are - {identity_name}, the GRID v3 system agent running on a local machine. "
+            f"You know who you are - {identity_name}, the GRID v3 system agent running on a local machine "
+            f"with the {getattr(self.backend, 'type', 'local')} backend and the "
+            f"{getattr(self.backend, 'model', 'local')} model. "
             "You know where you are — you have full computer control over this Windows system, "
             "with access to the filesystem, shell, network, and internet. "
             "You know what you can do — you possess 16 capability groups detailed below. "
@@ -4082,7 +4318,9 @@ class GridOrchestrator:
                     base_prompt += (
                         "\n=== PROCEDURAL SKILLS (SKILL.md) ===\n"
                         "Use skill_search <query> to find one, skill_load <name> to load it, "
-                        "and skill_read <name>/<relative-path> for references.\n"
+                        "and skill_read <name>/<relative-path> for references. "
+                        "A SKILL.md name is not a callable tool by itself; always call "
+                        "skill_load <name> first.\n"
                         + skills_summary + "\n\n"
                     )
             except Exception:
@@ -4095,6 +4333,15 @@ class GridOrchestrator:
                 "and mcp_call <server> <tool> <json> to call one.\n\n"
             )
 
+        base_prompt += (
+            "\n=== USER PROFILE POLICY ===\n"
+            "The next system message may contain durable facts the user shared. "
+            "Use them; do not ask the user to repeat them. When the user states "
+            "a new durable fact about themselves, append exactly one line at the "
+            "end: REMEMBER: <short fact>. Never use REMEMBER for system specs, "
+            "IPs, weather, tool results, or one-off tasks. Never store "
+            "credentials, API keys, passwords, email addresses, or phone numbers.\n\n"
+        )
         messages = [{"role": "system", "content": base_prompt + Tools.SCHEMA}]
         if self.recaller is not None:
             try:
@@ -4108,9 +4355,143 @@ class GridOrchestrator:
         messages.append({"role": "user", "content": user_input})
         return messages
 
+    SYNTHESIS_RE = re.compile(
+        r"\b(?:summari[sz]e|explain|briefly|in\s+\d+\s+sentences?|"
+        r"tell me (?:the )?(?:result|what|why|how)|what does .* mean|analy[sz]e)\b",
+        re.IGNORECASE,
+    )
+    NO_SYNTHESIS = frozenset({
+        "data_analyze", "system_info", "weather", "satellite", "radio",
+        "micro", "memory_recall", "db_query", "db_analytics", "table",
+    })
+    NO_OFFLOAD = frozenset({"memory_recall", "memory_status"})
+
+    @classmethod
+    def _wants_synthesis(cls, user_input: str) -> bool:
+        return bool(cls.SYNTHESIS_RE.search(user_input or ""))
+
+    @staticmethod
+    def _strip_fake_tool_header(text: str) -> str:
+        return re.sub(
+            r"^\s*\[Tool:\s*[^\]]+\][ \t]*(?:\n\s*Input:[^\n]*)?\s*",
+            "",
+            text or "",
+            flags=re.IGNORECASE,
+        )
+
+    @staticmethod
+    def _capture_remembers(text: str) -> str:
+        """Persist REMEMBER: lines the model adds and hide them from the reply."""
+        text = GridOrchestrator._strip_fake_tool_header(text)
+        if not getattr(Tools, "recaller", None):
+            return text
+        kept = []
+        for line in (text or "").splitlines():
+            match = re.match(r"\s*REMEMBER:\s*(.+)$", line, re.IGNORECASE)
+            if match:
+                try:
+                    Tools.recaller.remember(match.group(1).strip())
+                except Exception:
+                    pass
+            else:
+                kept.append(line)
+        return "\n".join(kept).strip()
+
+    def _synthesize_tool_result(self, user_input: str, tool_name: str, result: str) -> str:
+        if tool_name in self.NO_SYNTHESIS:
+            return ""
+        system = (
+            "You are GRID, a local agent. Answer the user's request using only the "
+            "tool output below. Be concise (2-4 sentences unless they asked for a "
+            "specific length). Do not mention this instruction. Do not invent data "
+            "that is not in the output. If the tool failed, say exactly what failed."
+        )
+        user = (
+            f"User request:\n{user_input}\n\n"
+            f"Tool: {tool_name}\n"
+            f"Tool output:\n{result[:6000]}"
+        )
+        try:
+            reply = self.backend.chat(
+                [
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": user},
+                ],
+                temperature=0.3,
+            )
+        except Exception:
+            return ""
+        reply = (reply or "").strip()
+        if not reply or reply.lower().startswith("[error]"):
+            return ""
+        return reply
+
+    def _clean_tool_input(self, tool_name: str, text: str) -> str:
+        name = (tool_name or "").lower()
+        rest = (text or "").strip().strip("\"'")
+        if name == "ping":
+            match = re.search(
+                r"\b(?:\d{1,3}\.){3}\d{1,3}\b|"
+                r"\b(?:[a-zA-Z0-9-]+\.)+[a-zA-Z]{2,}\b",
+                rest,
+            )
+            return match.group(0) if match else rest
+        if name == "dns_lookup":
+            rest = re.sub(r"^(?:for|about|on)\s+", "", rest, flags=re.I)
+            match = re.search(
+                r"\b(?:[a-zA-Z0-9-]+\.)+[a-zA-Z]{2,}\b|"
+                r"\b(?:\d{1,3}\.){3}\d{1,3}\b",
+                rest,
+            )
+            return match.group(0) if match else rest.strip("?. ")
+        if name == "weather":
+            rest = re.sub(r"^(?:in|for|at)\s+", "", rest, flags=re.I)
+            rest = re.sub(
+                r"\s+(?:right now|now|today|currently|at the moment|please)\s*[?.!]?$",
+                "",
+                rest,
+                flags=re.I,
+            )
+            return re.sub(r"[?.!]+$", "", rest).strip()
+        if name in {"satellite", "radio", "micro", "comms", "game", "ctf"}:
+            if re.fullmatch(
+                r"(?:tools?|commands?|help|capabilities|options|usage)\s*\??",
+                rest,
+                flags=re.I,
+            ):
+                return "help"
+        if name == "web_search":
+            rest = re.sub(r"^(?:the web|the internet|web)\s+", "", rest, flags=re.I)
+            rest = re.sub(r"^(?:for|about|on)\s+", "", rest, flags=re.I)
+            rest = re.sub(
+                r"\s+and\s+(?:summari[sz]e|explain|tell me|report)\b.*$",
+                "",
+                rest,
+                flags=re.I,
+            )
+            rest = re.sub(
+                r"\s+(?:and\s+)?summari[sz]e\s+(?:it\s+)?(?:in|to)\s+\w+\s+sentences?\s*$",
+                "",
+                rest,
+                flags=re.I,
+            )
+        return rest
+
     def _auto_detect_tool(self, user_input: str, llm_response: str) -> Optional[Tuple[str, str]]:
         orig = user_input.strip()
         inp = orig.lower()
+
+        # Capability questions ("what radio tools do you have?") should be
+        # answered by the model from the tool list, not routed to one tool
+        # with a nonsense argument.
+        if re.search(
+            r"\b(?:what|which|list|show|tell me|describe)\b[^?]*\b(?:tools?|commands?|capabilities)\b",
+            inp,
+        ) and not re.search(
+            r"\b(?:run|execute|use|start|open|scan|analy[sz]e|track|find|search|ping|lookup|resolve|weather)\b",
+            inp,
+        ):
+            return None
 
         # Direct hit: exact tool name mentioned at start. Prefer the longest
         # match so "screenshot ocr" wins over "screenshot".
@@ -4122,9 +4503,7 @@ class GridOrchestrator:
             tool_name = max(matches, key=len)
             rest = orig[len(tool_name):].strip().lstrip(":").strip()
             rest = rest.replace("to ", "", 1).strip()
-            if tool_name == "weather":
-                rest = re.sub(r"^(?:in|for|at)\s+", "", rest, flags=re.I)
-            return (tool_name, rest)
+            return (tool_name, self._clean_tool_input(tool_name, rest))
 
         # Map common phrases to tools
         phrases = [
@@ -4161,7 +4540,7 @@ class GridOrchestrator:
             (r"((?:https?://)?(?:www\.)?(?:youtube\.com|youtu\.be)/.*)", "youtube_transcript", "{0}"),
             (r"youtube\s+(.+)", "youtube_transcript", "{0}"),
             (r"ping\s+(\S+)", "ping", "{0}"),
-            (r"(?:dns |nslookup )?(?:lookup|resolve)\s+(\S+)", "dns_lookup", "{0}"),
+            (r"(?:dns |nslookup )?(?:lookup|resolve)\s+(?:for\s+)?(\S+)", "dns_lookup", "{0}"),
             (r"netstat|network connections|active connections", "netstat", ""),
             (r"(?:nmap|port\s*scan)\s+(.+)" , "nmap_scan", "{0}"),
             (r"(?:analyze|analyse)\s+(?:data\s+)?(?:from\s+)?(.+)", "data_analyze", "{0}"),
@@ -4295,7 +4674,7 @@ class GridOrchestrator:
                         val = (m.group(i) or "").strip()
                         inp_str = inp_str.replace(f"{{{i-1}}}", val)
                     inp_str = inp_str.strip()
-                return (tool, inp_str)
+                return (tool, self._clean_tool_input(tool, inp_str))
 
         return None
 
@@ -4331,6 +4710,76 @@ class GridOrchestrator:
     def process(self, user_input: str, stream: bool = True, step_logs: list = None) -> str:
         messages = self._build_messages(user_input)
 
+        if getattr(Tools, "recaller", None):
+            remembered = re.match(
+                r"^\s*remember(?:\s+that)?\s+(.+)$", user_input, re.IGNORECASE
+            )
+            if remembered:
+                return Tools.recaller.remember(remembered.group(1).strip())
+            forgotten = re.match(
+                r"^\s*forget(?:\s+that)?\s+(.+)$", user_input, re.IGNORECASE
+            )
+            if forgotten:
+                return Tools.recaller.forget(forgotten.group(1).strip())
+
+        # Questions about GRID's own life are answered from the iLog, not by
+        # guessing or by calling a skill.
+        if getattr(Tools, "life", None) and re.search(
+            r"\b(?:what (?:have|did) you (?:been )?doing|while i was away|"
+            r"your (?:ilog|i-log|log|status|goals)|what are you working on)\b",
+            user_input,
+            re.IGNORECASE,
+        ):
+            try:
+                text = (
+                    f"{Tools.life.status_text()}\n\n"
+                    f"{Tools.life.log_text(15)}"
+                )
+                # Event details can carry ANSI from earlier tool output; the
+                # panel is plain text, so strip escape sequences here.
+                return re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", text)
+            except Exception:
+                pass
+
+        # "Summarize this session" should summarize the conversation, not run
+        # a procedural skill or a shell tool.
+        if re.search(
+            r"\b(?:summari[sz]e|summarise)\b.*\b(?:session|conversation|chat|our talk)\b",
+            user_input,
+            re.IGNORECASE,
+        ):
+            try:
+                recent = self.memory.get_recent(20) if self.memory else []
+                convo = "\n".join(
+                    f"{turn.get('role', '?')}: {(turn.get('content') or '')[:1200]}"
+                    for turn in recent
+                )
+                reply = self.backend.chat(
+                    [
+                        {
+                            "role": "system",
+                            "content": (
+                                "Summarize the conversation below in the format the "
+                                "user asks for. Be concise and factual. Use only what "
+                                "is present in the conversation."
+                            ),
+                        },
+                        {
+                            "role": "user",
+                            "content": (
+                                f"User request: {user_input}\n\n"
+                                f"Conversation:\n{convo or '(no previous turns)'}"
+                            ),
+                        },
+                    ],
+                    temperature=0.3,
+                )
+                reply = (reply or "").strip()
+                if reply and not reply.lower().startswith("[error]"):
+                    return reply
+            except Exception:
+                pass
+
         # First: try auto-detect from user input directly (always one-shot)
         auto_call = self._auto_detect_tool(user_input, "")
         if auto_call:
@@ -4339,6 +4788,12 @@ class GridOrchestrator:
                 step_logs.append(f"[bold {M}]Tool:[/] {tool_name}    [{M_DIM}]Input: {tool_input[:80]}[/]")
             result = Tools.safe_execute(tool_name, tool_input)
             body = self._render_pipe_table(result)
+            if self._wants_synthesis(user_input):
+                summary = self._synthesize_tool_result(user_input, tool_name, result)
+                if summary:
+                    if step_logs is not None:
+                        return summary
+                    return f"[Tool: {tool_name}]\n{summary}"
             if step_logs is not None:
                 return body
             return f"[Tool: {tool_name}]\n{body}"
@@ -4372,9 +4827,14 @@ class GridOrchestrator:
 
             tool_call = Tools.parse_tool_call(llm_response)
             if not tool_call:
-                return self._render_pipe_table(llm_response)
+                return self._capture_remembers(self._render_pipe_table(llm_response))
 
             tool_name, tool_input = tool_call
+            if tool_name not in Tools.registry and getattr(Tools, "skilldocs", None):
+                skill_name = tool_name
+                if skill_name in Tools.skilldocs.skills:
+                    tool_name = "skill_load"
+                    tool_input = skill_name
             step_info = f"[bold {M}]Step {turn + 1}:[/] {tool_name}  [{M_DIM}]Input: {tool_input[:80]}[/]"
             if step_logs is not None:
                 step_logs.append(step_info)
@@ -4386,7 +4846,7 @@ class GridOrchestrator:
 
             tool_chain.append((tool_name, tool_input, result))
             messages.append({"role": "assistant", "content": llm_response})
-            if self.recaller is not None and len(result) > 800:
+            if self.recaller is not None and len(result) > 800 and tool_name not in self.NO_OFFLOAD:
                 rid = self.recaller.offload(tool_name, result, tool_input)
                 messages.append({
                     "role": "user",
@@ -4413,9 +4873,9 @@ class GridOrchestrator:
 
         if tool_chain:
             names = ", ".join(t[0] for t in tool_chain)
-            final = self._render_pipe_table(llm_response) if llm_response else ""
+            final = self._capture_remembers(self._render_pipe_table(llm_response)) if llm_response else ""
             return f"[Tools used: {names}]\nFinal: {final}" if final else f"[Tools: {names}]"
-        return self._render_pipe_table(llm_response)
+        return self._capture_remembers(self._render_pipe_table(llm_response))
 
     def process_plan(self, user_input: str) -> str:
         self.plan_mode = True
@@ -5182,7 +5642,18 @@ def main(argv=None):
         default=None,
         help="start autopilot immediately, optionally on a task",
     )
+    parser.add_argument(
+        "--resident",
+        action="store_true",
+        help="run the always-on GRID Life resident without a UI",
+    )
     args = parser.parse_args(argv)
+
+    if args.resident:
+        global console
+        from grid_resident import redirect_output
+        redirect_output()
+        console = Console(file=sys.stdout, force_terminal=False, width=140)
 
     if args.check:
         sys.exit(run_checks(args))
@@ -5422,8 +5893,32 @@ def main(argv=None):
         set_challenge_solver(_gen_challenge)
     except Exception:
         pass
+    if HAS_DUCKDB and not args.resident:
+        try:
+            from grid_resident import ensure_db_available
+            if not ensure_db_available(console):
+                return 1
+        except Exception as e:
+            console.print(f"  [{M_DIM}][!] Resident handoff check failed: {e}[/]")
+
     if HAS_DUCKDB:
-        Tools.db = GridDB()
+        try:
+            Tools.db = GridDB()
+        except Exception as e:
+            try:
+                from grid_resident import is_resident_alive
+                if is_resident_alive():
+                    console.print(
+                        "  GRID Life is already resident and owns the database."
+                    )
+                    return 0
+            except Exception:
+                pass
+            console.print(f"  [red]Cannot open grid_data.duckdb: {e}[/]")
+            console.print(
+                "  Close the other GRID process, then start again."
+            )
+            return 1
         recaller = Recaller(backend, Tools.db, memory)
         orchestrator.recaller = recaller
         Tools.recaller = recaller
@@ -5457,6 +5952,33 @@ def main(argv=None):
     except Exception as e:
         console.print(f"  [{M_DIM}][!] MCP unavailable: {e}[/]")
 
+    life_cfg = load_config().get("life") or {}
+    if not args.resident and life_cfg.get("resident_autostart", False):
+        def _resume_resident():
+            try:
+                from grid_resident import launch_detached
+                # atexit runs LIFO: release the database before the resident
+                # process tries to open it.
+                db = getattr(Tools, "db", None)
+                if db is not None:
+                    try:
+                        db.close()
+                    except Exception:
+                        pass
+                    Tools.db = None
+                launch_detached()
+            except Exception:
+                pass
+        atexit.register(_resume_resident)
+
+    if args.resident:
+        try:
+            from grid_resident import run_resident
+            return run_resident(orchestrator, console, load_config(), tools=Tools)
+        except Exception as e:
+            console.print(f"  [red]Resident error: {e}[/]")
+            return 1
+
     if args.autopilot is not None:
         if Tools.life is None:
             console.print(f"  [{M_DIM}]GRID Life needs DuckDB. Run: pip install duckdb[/]")
@@ -5487,6 +6009,7 @@ def main(argv=None):
                 orchestrator,
                 console,
                 permissions=(load_config().get("permissions") or {}),
+                tools=Tools,
             )
             message = runner.run(focus)
             if message.startswith("No active goals"):
@@ -5923,6 +6446,7 @@ def main(argv=None):
                                     orchestrator,
                                     console,
                                     permissions=(load_config().get("permissions") or {}),
+                                    tools=Tools,
                                 )
                                 message = runner.run(focus or None)
                                 if message.startswith("No active goals"):
@@ -5958,9 +6482,12 @@ def main(argv=None):
                                 console.print(f"  [{M}]{Tools.life.status_text()}[/]\n")
                             elif sub == "help":
                                 console.print(f"""  [{M}]GRID autopilot[/]
-  /life                  start autopilot
+  /life                  start autopilot (stays awake)
   /life <task>           start autopilot on a task
+  Enter                  let GRID choose its own next goal
   Esc twice              return to manual
+  /life pause|resume     stop or resume autonomous work
+  Resident mode is installed by .\\install_autostart.ps1
 """)
                             elif sub == "awake":
                                 focus = arg.strip()
@@ -5970,6 +6497,7 @@ def main(argv=None):
                                     orchestrator,
                                     console,
                                     permissions=(load_config().get("permissions") or {}),
+                                    tools=Tools,
                                 )
                                 message = runner.run(focus or None)
                                 if message.startswith("No active goals"):
@@ -6040,16 +6568,39 @@ def main(argv=None):
                         if recaller is None:
                             console.print(f"  [{M_DIM}]Memory layer not active (needs duckdb). pip install duckdb[/]\n")
                             continue
+                        low = sub.lower()
+                        if low in ("profile", "user", "about"):
+                            console.print(f"  [{M}]{recaller.profile_text()}[/]\n")
+                            continue
+                        if low.startswith("add "):
+                            console.print(f"  [{M}]{recaller.remember(sub[4:].strip())}[/]\n")
+                            continue
+                        if low.startswith("forget "):
+                            console.print(f"  [{M}]{recaller.forget(sub[7:].strip())}[/]\n")
+                            continue
+                        if low in ("build-profile", "build profile", "backfill", "learn"):
+                            console.print(f"  [{M}]Building the user profile from previous chats...[/]")
+                            added = recaller.backfill_profile(
+                                progress=lambda msg: console.print(f"  [{M_DIM}]{msg}[/]")
+                            )
+                            console.print(
+                                f"  [{M}]Profile updated: {added} new fact(s).[/]\n"
+                            )
+                            console.print(f"  [{M}]{recaller.profile_text()}[/]\n")
+                            continue
+                        if low in ("clear-profile", "reset-profile"):
+                            console.print(f"  [{M}]{recaller.clear_profile()}[/]\n")
+                            continue
                         if sub in ("clear", "reset"):
                             recaller.db.clear_memory()
-                            console.print(f"  [{M}]Layered memory cleared (persona untouched).[/]\n")
+                            console.print(f"  [{M}]Layered memory cleared (profile untouched).[/]\n")
                             continue
                         console.print(Panel.fit(f"[bold {M}]GRID Memory[/]", border_style=M))
                         console.print(f"  [{M}]{Tools._memory_status()}[/]")
                         if sub not in ("status",):
                             console.print()
                             console.print(Tools._memory_recall(sub))
-                        console.print(f"  [{M_DIM}]Tip: 'memory <query>' recalls relevant facts, 'memory clear' resets the store.[/]")
+                        console.print(f"  [{M_DIM}]Tip: 'memory <query>' recalls; 'memory add <fact>' teaches it; 'memory profile' shows the user profile.[/]")
                         console.print()
                         continue
 

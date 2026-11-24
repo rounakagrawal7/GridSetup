@@ -28,28 +28,39 @@ The latest release adds a real memory system that works across sessions with **z
 
 | Layer | What it holds | Where it lives |
 |---|---|---|
-| **L3 · Persona** | Durable facts & preferences about you | `grid_persona.md` |
+| **L3 · User profile** | Durable facts & preferences about you | `grid_persona.md` |
 | **L2 · Scenarios** | Summaries of completed tasks | DuckDB `memory_scenarios` |
 | **L1 · Atoms** | Standalone factual statements | DuckDB `memory_atoms` |
 | **L0 · Transcript** | Raw conversation | `memory.md` |
 | **Refs** | Full verbatim tool outputs (offloaded) | `refs/<id>.md` |
 
 **How it works:**
-- **Every 5 turns**, GRID silently runs one LLM distillation pass over recent history via `Recaller.distill()` — extracting atomic facts, task scenarios, and persona deltas. No feature slice you're still in the middle of gets lost.
-- **On every turn**, `_build_messages()` injects the persona plus *only the memories relevant to the current request* (keyword recall) alongside your recent turns — so context stays lean and relevant, not bloated.
+- **User profile first**: `grid_persona.md` is injected into every turn as the `USER PROFILE` block, before technical memory. The model is told to use it and not ask you to repeat yourself.
+- **Every 5 turns**, GRID silently runs one LLM distillation pass over recent history via `Recaller.distill()` — extracting atomic facts, task scenarios, and durable **user** facts. System specs, IPs and tool output are excluded from the profile.
+- **Remember lines**: when the model spots a durable fact about you, it can append `REMEMBER: <fact>`. The harness stores it and hides the line from the reply.
+- **On every turn**, `_build_messages()` injects the profile plus *only the memories relevant to the current request* (keyword recall) alongside your recent turns — so context stays lean and relevant, not bloated.
 - **Tool-output offload**: verbose tool results (>800 chars) are written whole to `refs/`; the model is handed a short preview + a reference id it can pull the full output from on demand — dramatically cutting token usage on long chains.
 
 **Memory commands & tools:**
 
 | Command / Tool | Purpose |
 |---|---|
-| `/memory` | Show memory stats (atoms / scenarios / refs / persona) |
+| `/memory` | Show memory stats (atoms / scenarios / refs / profile) |
 | `/memory <query>` | Recall memories relevant to a query |
-| `/memory clear` | Reset the layered memory store |
+| `/memory add <fact>` | Save a durable fact about you to the profile |
+| `/memory profile` | Show the full user profile |
+| `/memory forget <fact>` | Remove matching profile facts |
+| `/memory build-profile` | Mine previous chats for durable user facts |
+| `/memory clear` | Reset the technical memory store (profile untouched) |
+| `/memory clear-profile` | Clear the user profile |
+| `remember that ...` | Chat shortcut for `/memory add` |
+| `forget that ...` | Chat shortcut for `/memory forget` |
 | `/ref <id>` | Read a full offloaded tool output |
 | `memory_recall` | Tool — search layered memory for context |
 | `memory_status` | Tool — memory layer health |
 | `ref_read` | Tool — pull an offloaded ref by id |
+
+The profile refuses credentials, API keys, passwords and secrets. You can also edit `grid_persona.md` directly; it is read again on the next turn.
 
 *Inspired by the layered-memory approach popularised by agent frameworks such as Hermes and OpenClaw and TencentDB Agent Memory — humanlike memory, not a bigger scratchpad.*
 
@@ -61,7 +72,7 @@ GRID isn't another messaging tool for one AI. It's the **only agent that fuses a
 
 | Capability | **GRID (v3) - 80+ tools** | Hermes | OpenClaw |
 |---|---|---|---|
-| 🧠 **4-tier memory** (persona · scenarios · atoms · offloaded refs) | ✅ built-in, auto-distills every 5 turns | ⚠️ SQLite + user modeling | ⚠️ file-based marks/YAML |
+| 🧠 **4-tier memory** (user profile · scenarios · atoms · offloaded refs) | ✅ built-in, auto-distills every 5 turns | ⚠️ SQLite + user modeling | ⚠️ file-based marks/YAML |
 | 🔍 **OSINT** (domain/IP/email/phone/username, dorking, webcam/CCTV) | ✅ **built-in** | ❌ none | ⚠️ web-search only |
 | 📡 **Network recon** (Nmap, DNS, netstat, full TCP/UDP netcat suite) | ✅ **built-in** | ❌ none | ⚠️ limited |
 | 🎛️ **SDR / HAM radio** (Radio-Browser, KiwiSDR, RTL-SDR) | ✅ **built-in** | ❌ | ❌ |
@@ -151,17 +162,19 @@ GRID v3 adds a persistent local life layer: identity, goals, commitments, a hear
 
 | Command | Action |
 |---|---|
-| `/life` | Start autopilot |
+| `/life` | Start autopilot (stays awake) |
 | `/life <task>` | Start autopilot on a task |
+| **Enter** | Let GRID choose its own next goal |
 | **Esc twice** | Return to manual |
+| `/life pause` / `/life resume` | Stop or resume autonomous work |
 
 `/life` starts the conversation itself: it greets you in the current persona, says what it is about to work on, reports each cycle, and asks a follow-up when it needs a decision. It also checks in every few cycles. **Esc twice** is the only thing you need to return to manual chat.
 
 A `/life <task>` goal is **one-shot**: after one successful cycle it is marked done, but GRID **stays awake** and asks what to do next. It only returns to manual when you press **Esc twice**. For a long-running goal, add it explicitly with `/life goal add ongoing <title>`.
 
-Defaults live in `config.json` under `life`: 30-minute heartbeat, quiet hours 22:00–08:00, a 09:00 brief, and daily budgets of 12 actions and 6 messages. The standalone `python grid_life.py status|tick|log` works when GRID is closed.
+Defaults live in `config.json` under `life`: a 30-minute heartbeat, quiet hours 22:00–08:00, a 09:00 brief, and an **unlimited** daily action budget (`max_actions_per_day: 0`). Set a positive number if you want a throttle; reaching it makes GRID rest, never stop. Proactive messages still have their own `max_messages_per_day` cap. The standalone `python grid_life.py status|tick|log` works when GRID is closed.
 
-An explicit `/life pause` still wins. Advanced subcommands (`status`, `log`, `goals`, `identity`, `pause`, `resume`) exist for debugging but are not part of normal use. Autopilot uses `autopilot_interval_seconds` (20s) and `autopilot_checkin_cycles` (3) from `config.json`.
+An explicit `/life pause` still wins. Advanced subcommands (`status`, `log`, `goals`, `identity`, `pause`, `resume`) exist for debugging but are not part of normal use. Autopilot uses `autopilot_interval_seconds` (20s) and `autopilot_checkin_cycles` (3) from `config.json`. Pressing **Enter** instead of typing lets GRID choose its own next goal.
 
 GRID Life uses the same identity as `/persona`. If you set `/persona set TinaGrid`, then:
 - `/life` starts as TinaGrid and knows `Moltbook as TinaGrid`;
@@ -182,9 +195,38 @@ If no persona is set, `/life` asks for a name first. It also asks what to work o
 - it reads recent chats, durable memory, tool logs, scan results and local database counts to understand you better, can inspect more with `db_query`, and redacts obvious secrets;
 - with a cloud backend, this local context is omitted unless `life.allow_cloud_context` is true;
 - after a one-shot goal it asks what to do next instead of exiting;
-- when the daily action budget is reached, it rests and tells you, but stays in autopilot until Esc twice.
+- when the daily throttle is reached, it rests and keeps its routine, but stays in autopilot until Esc twice;
+- idle replies are conversation, not tool calls; if you give it a real task it records a goal and starts a work cycle;
+- when you press Enter, it can give itself one small goal (bounded by `max_self_goals_per_day`, default 24);
+- it runs the normal heartbeat during autopilot, so daily briefs, commitments and reflections still appear.
 
 `autopilot_interval_seconds` controls the gap between work cycles, `autopilot_checkin_cycles` controls check-ins, and `autopilot_idle_seconds` controls how long it waits before asking again when there are no goals.
+
+### Always-on resident
+
+The resident is the version of GRID Life that keeps its own clock after the terminal closes. One process owns `grid_data.duckdb` at a time:
+
+- `.\install_autostart.ps1` installs a `GRID Life` shortcut that starts `--resident` at login (and the tray icon);
+- when you open the interactive app, it asks the resident to finish its current thought and hand over the database;
+- when you exit the app, set `life.resident_autostart` to `true` and the app relaunches the resident for you;
+- quiet hours put the resident to sleep instead of ending it; pause/resume still works;
+- after login the resident waits `resident_startup_grace_seconds` (default 120) before its first model call, so Windows can finish loading;
+- GRID starts Ollama with a hidden console, so Ollama's `llama-server` and GPU-discovery children inherit a hidden console instead of flashing terminal windows;
+- the resident denies every non-read tool unless you configure `permissions`, so it cannot silently send email, run shell commands or touch hardware;
+- logs live in `logs/resident-YYYYMMDD.log`.
+
+```powershell
+python grid_agent.py --no-input --resident
+```
+
+Check it from another terminal:
+
+```powershell
+curl http://127.0.0.1:8770/health
+curl http://127.0.0.1:8770/status
+```
+
+The control surface is loopback-only. `POST /handoff` asks it to release the database; `POST /pause` and `POST /resume` map to `/life pause` and `/life resume`.
 
 ### Agent Skills
 
@@ -306,16 +348,17 @@ pip install pystray
 .\install_autostart.ps1
 ```
 
-The tray shows **Open GRID**, **Start autopilot** and **Quit**. Remove it with `.\uninstall_autostart.ps1`. The tray only launches GRID; tools and autopilot stay in the GRID process.
+This installs two startup shortcuts: **GRID Tray** (Open GRID, Start autopilot, Pause life, Resume life, Quit) and **GRID Life** (`--resident`, no console). Remove both with `.\uninstall_autostart.ps1`. The tray only launches GRID; the resident and tools stay in the GRID process.
 
-You can also start autopilot directly:
+You can also start either mode directly:
 
 ```powershell
 python grid_agent.py --no-input --autopilot
 python grid_agent.py --no-input --autopilot "Map my home network"
+python grid_agent.py --no-input --resident
 ```
 
-Esc twice returns to manual.
+Esc twice returns foreground autopilot to manual. The resident has no UI; use `/life pause`, `/life resume` or the loopback endpoints above. Set `life.resident_autostart: true` in `config.json` if you want the app to relaunch the resident every time you exit.
 
 ### Permissions and auto-email
 
@@ -369,6 +412,8 @@ The `email` section must already have working SMTP settings. With `mode: "auto"`
 | `skill_library/` | Built-in SKILL.md procedures (MIT) |
 | `grid_life.py` | Persistent identity, goals, commitments, heartbeat and iLog |
 | `grid_awake.py` | Autopilot, step display and double-Esc cancel |
+| `grid_resident.py` | Always-on resident, loopback control surface and app handoff |
+| `tools/` | Optional profile backfill, pilot harness and boot-window logger |
 | `grid_permissions.py` | Ask/auto/read-only policy for autonomous tool use |
 | `grid_docs.py` | `document_read` + optional MarkItDown |
 | `grid_mcp.py` / `grid_mcp_server.py` | MCP client manager and read-only GRID MCP server |
@@ -455,7 +500,7 @@ A single cycle runs all phases: reply to new comments on **your own posts**, upv
 - **Computer Use** — mouse, keyboard, screenshots
 - **Data & Code** — CSV/JSON analysis via pandas, arbitrary Python execution
 - **Database** — DuckDB SQL queries, PocketBase sync
-- **Memory** — persona, facts, scenarios, offloaded refs, relevance ranking, keyword recall
+- **Memory** — user profile, facts, scenarios, offloaded refs, relevance ranking, keyword recall
 - **Communication** — Telegram, email
 - **System** — hardware info, process management, weather
 - **Flight / Satellite / Radio / IoT** — live flight tracking, satellite passes, SDR, microcontrollers

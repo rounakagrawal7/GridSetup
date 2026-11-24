@@ -20,11 +20,20 @@ LIFE_DEFAULTS: Dict[str, Any] = {
     "quiet_hours": ["22:00", "08:00"],
     "brief_time": "09:00",
     "brief_window_minutes": 30,
-    "max_actions_per_day": 12,
+    # 0 (or less) means unlimited. A positive value is an optional throttle
+    # for task volume; internal work and reflection are never a hard stop.
+    "max_actions_per_day": 0,
     "max_messages_per_day": 6,
     "autopilot_interval_seconds": 20,
     "autopilot_checkin_cycles": 3,
     "autopilot_idle_seconds": 60,
+    "autopilot_self_direct": True,
+    "max_self_goals_per_day": 24,
+    "resident_autostart": False,
+    "resident_interval_seconds": 300,
+    "resident_idle_seconds": 900,
+    "resident_quiet_hours": True,
+    "resident_startup_grace_seconds": 120,
     "include_local_context": True,
     "allow_cloud_context": False,
     "compress_context": False,
@@ -69,6 +78,19 @@ def _in_quiet_hours(now: datetime, quiet: Any) -> bool:
     if start <= end:
         return start <= current < end
     return current >= start or current < end
+
+
+def _seconds_until_quiet_end(now: datetime, quiet: Any) -> int:
+    """Seconds until quiet hours end. Returns 0 outside quiet hours."""
+    if not _in_quiet_hours(now, quiet):
+        return 0
+    end = _parse_hhmm(quiet[1])
+    if end is None:
+        return 0
+    target = datetime.combine(now.date(), end)
+    if target <= now:
+        target += timedelta(days=1)
+    return max(1, int((target - now).total_seconds()))
 
 
 def _new_id(prefix: str) -> str:
@@ -639,9 +661,44 @@ class LifeEngine:
         row = self.conn.execute(sql, list(params)).fetchone()
         return int(row[0]) if row else 0
 
+    def action_limit(self) -> int:
+        """Daily action throttle. 0 or less means unlimited."""
+        try:
+            return int(self.cfg.get("max_actions_per_day", 0) or 0)
+        except (TypeError, ValueError):
+            return 0
+
     def can_act(self, now: Optional[datetime] = None) -> bool:
+        """True when the optional daily throttle has room for another action.
+
+        A zero (or negative) limit means the agent lives on its own clock and is
+        never stopped by a budget. Message volume still has its own cap.
+        """
+        limit = self.action_limit()
+        if limit <= 0:
+            return True
         now = now or self.now_fn()
-        return self._actions_today(now) < int(self.cfg.get("max_actions_per_day", 12))
+        return self._actions_today(now) < limit
+
+    def in_quiet_hours(self, now: Optional[datetime] = None) -> bool:
+        now = now or self.now_fn()
+        return _in_quiet_hours(now, self.cfg.get("quiet_hours"))
+
+    def seconds_until_quiet_end(self, now: Optional[datetime] = None) -> int:
+        now = now or self.now_fn()
+        return _seconds_until_quiet_end(now, self.cfg.get("quiet_hours"))
+
+    def self_goals_today(self, now: Optional[datetime] = None) -> int:
+        """How many goals the agent gave itself today (self-direction cap)."""
+        now = now or self.now_fn()
+        start, end = self._day_range(now)
+        return self._count(
+            """
+            SELECT COUNT(*) FROM life_goals
+            WHERE created_by = 'self' AND created_at >= ? AND created_at < ?
+            """,
+            (start, end),
+        )
 
     def _actions_today(self, now: datetime) -> int:
         start, end = self._day_range(now)
@@ -793,7 +850,12 @@ class LifeEngine:
             f"{goals} active goal(s), {commitments} open commitment(s)."
         )
 
-    def _tick(self, now: datetime, manual: bool = False) -> Dict[str, Any]:
+    def _tick(
+        self,
+        now: datetime,
+        manual: bool = False,
+        work_goals: bool = True,
+    ) -> Dict[str, Any]:
         if not self.cfg.get("enabled", True):
             return self._rest(now, "life disabled")
         if self.is_paused():
@@ -801,9 +863,9 @@ class LifeEngine:
         if not manual and _in_quiet_hours(now, self.cfg.get("quiet_hours")):
             return self._rest(now, "quiet hours")
 
-        max_actions = int(self.cfg.get("max_actions_per_day", 12))
+        max_actions = self.action_limit()
         max_messages = int(self.cfg.get("max_messages_per_day", 6))
-        if not manual and self._actions_today(now) >= max_actions:
+        if not manual and max_actions > 0 and self._actions_today(now) >= max_actions:
             return self._rest(now, "daily action budget reached")
 
         can_message = self._messages_today(now) < max_messages
@@ -845,7 +907,7 @@ class LifeEngine:
                 "event_id": event["id"],
             }
 
-        goal = self._stale_goal(now)
+        goal = self._stale_goal(now) if work_goals else None
         if goal:
             self.conn.execute(
                 """
@@ -868,15 +930,22 @@ class LifeEngine:
 
         return self._rest(now, "nothing due")
 
-    def tick(self, now: Optional[datetime] = None, manual: bool = False) -> Dict[str, Any]:
+    def tick(
+        self,
+        now: Optional[datetime] = None,
+        manual: bool = False,
+        work_goals: bool = True,
+    ) -> Dict[str, Any]:
         """Run one heartbeat.
 
         Scheduled heartbeats call this with manual=False and respect quiet hours
-        and budgets. A user-invoked wake calls it with manual=True, so GRID can
-        always be woken on demand.
+        and the optional action throttle. A user-invoked wake calls it with
+        manual=True, so GRID can always be woken on demand. Autopilot calls it
+        with work_goals=False when it is doing its own work cycles, so the
+        heartbeat only handles messages, briefs and reflection.
         """
         now = now or self.now_fn()
-        result = self._tick(now, manual=manual)
+        result = self._tick(now, manual=manual, work_goals=work_goals)
         self.set_state("last_tick", now.isoformat())
         return result
 
@@ -910,6 +979,13 @@ class LifeEngine:
         quiet = self.cfg.get("quiet_hours") or []
         quiet_text = f"{quiet[0]}-{quiet[1]}" if len(quiet) == 2 else "off"
 
+        limit = self.action_limit()
+        budget = (
+            "unlimited"
+            if limit <= 0
+            else f"{self._actions_today(now)}/{limit} actions"
+        )
+        max_messages = int(self.cfg.get("max_messages_per_day", 6))
         lines = [
             "GRID Life - status",
             f"  Identity:     {ident.get('name', 'GRID')}",
@@ -918,11 +994,12 @@ class LifeEngine:
             f"  Next wake:    {next_wake}",
             f"  Heartbeat:    {heartbeat} min",
             f"  Quiet hours:  {quiet_text}",
-            f"  Budget:       {self._actions_today(now)}/{self.cfg.get('max_actions_per_day', 12)} actions, "
-            f"{self._messages_today(now)}/{self.cfg.get('max_messages_per_day', 6)} messages today",
+            f"  Budget:       {budget}",
+            f"  Messages:     {pending} pending, {self._messages_today(now)} today "
+            f"(cap {max_messages})",
+            f"  Self goals:   {self.self_goals_today(now)} today",
             f"  Goals:        {active_goals} active",
             f"  Commitments:  {open_commitments} open",
-            f"  Messages:     {pending} pending",
         ]
         return "\n".join(lines)
 

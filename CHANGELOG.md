@@ -1,5 +1,41 @@
 ﻿# Changelog
 
+## v3.1 - always alive
+
+- `/life` no longer stops when the daily throttle is reached. The action budget
+  is now optional and defaults to unlimited (`max_actions_per_day: 0`), so
+  internal work and reflection never end the agent's day.
+- Idle replies are conversation, not task execution. The model answers in its
+  own voice without tools and appends `GOAL:` only when the human actually
+  asked for work.
+- Pressing Enter in autopilot lets GRID give itself one small goal, capped by
+  `max_self_goals_per_day` (default 24).
+- Autopilot runs the normal heartbeat (`work_goals=False`), so briefs,
+  commitments and reflections still surface during long sessions.
+- New always-on resident: `python grid_agent.py --no-input --resident` owns
+  DuckDB, runs headless on a slow rhythm, sleeps through quiet hours and exposes
+  a loopback control surface on `127.0.0.1:8770` (`/health`, `/status`,
+  `/handoff`, `/pause`, `/resume`).
+- The interactive app asks a live resident to hand over the database before it
+  opens, and `life.resident_autostart` relaunches the resident on exit.
+- `install_autostart.ps1` now installs both the tray and the resident at login;
+  logs go to `logs/resident-YYYYMMDD.log`.
+- Resident denies every non-read tool unless permissions explicitly allow it.
+- New durable user profile in `grid_persona.md`, injected before technical memory
+  on every turn. `/memory add <fact>`, `/memory profile`, `/memory forget`,
+  `/memory build-profile`, and chat shortcuts `remember that ...` / `forget that ...`
+  manage it. The model can also emit `REMEMBER:` lines, which the harness stores
+  and hides from the reply.
+- Profile extraction ignores system specs, tool results, one-off tasks, test
+  prompts and PII, and refuses credentials/secrets. `tools/backfill_profile.py`
+  mines previous chats for durable user facts.
+- GRID now starts Ollama with a hidden console and the resident waits a
+  configurable startup grace period before its first model call. This prevents
+  Ollama's `llama-server`/GPU-discovery subprocesses from flashing terminal
+  windows during Windows login.
+- 112 tests cover the life loop, profile memory, auto-detect parsing, resident
+  handoff, autopilot pacing and the existing tool registry; 49 routing evals.
+
 ## v3.0 - GRID Life
 
 - `/life` is autonomous autopilot: one command, Esc twice returns to manual.

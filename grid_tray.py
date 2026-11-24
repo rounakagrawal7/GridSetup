@@ -52,12 +52,28 @@ def main() -> int:
     def start_autopilot(icon=None, item=None):
         _launch(["--autopilot"])
 
+    def pause_life(icon=None, item=None):
+        try:
+            from grid_resident import request_pause
+            request_pause(True)
+        except Exception:
+            pass
+
+    def resume_life(icon=None, item=None):
+        try:
+            from grid_resident import request_pause
+            request_pause(False)
+        except Exception:
+            pass
+
     def quit_tray(icon, item=None):
         icon.stop()
 
     menu = pystray.Menu(
         pystray.MenuItem("Open GRID", open_grid, default=True),
         pystray.MenuItem("Start autopilot", start_autopilot),
+        pystray.MenuItem("Pause life", pause_life),
+        pystray.MenuItem("Resume life", resume_life),
         pystray.MenuItem("Quit", quit_tray),
     )
     icon = pystray.Icon("grid", _icon_image(), "GRID v3", menu=menu)

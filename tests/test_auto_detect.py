@@ -1,0 +1,75 @@
+import unittest
+
+from grid_agent import GridOrchestrator, Tools
+
+
+class FakeBackend:
+    type = "ollama"
+    model = "test-model"
+
+    def chat(self, messages, temperature=0.3):
+        return "summary"
+
+
+class AutoDetectTests(unittest.TestCase):
+    def setUp(self):
+        self.orch = GridOrchestrator(FakeBackend(), None)
+
+    def assert_call(self, text, tool, tool_input):
+        result = self.orch._auto_detect_tool(text, "")
+        self.assertIsNotNone(result, text)
+        self.assertEqual(result[0], tool, text)
+        self.assertEqual(result[1], tool_input, text)
+
+    def test_ping_extracts_only_the_host(self):
+        self.assert_call("Ping 8.8.8.8 and tell me the result.", "ping", "8.8.8.8")
+
+    def test_dns_lookup_skips_for_and_punctuation(self):
+        self.assert_call(
+            "Do a DNS lookup for example.com.", "dns_lookup", "example.com"
+        )
+
+    def test_weather_strips_time_filler(self):
+        self.assert_call(
+            "What is the weather in Kathmandu right now?",
+            "weather",
+            "Kathmandu",
+        )
+
+    def test_capability_question_is_not_a_tool_call(self):
+        self.assertIsNone(
+            self.orch._auto_detect_tool(
+                "What radio and satellite tools do you have?", ""
+            )
+        )
+
+    def test_web_search_drops_summarize_instruction(self):
+        self.assert_call(
+            "Search the web for the latest Ollama release and summarize it in two sentences.",
+            "web_search",
+            "the latest Ollama release",
+        )
+
+    def test_satellite_tools_routes_to_help(self):
+        self.assert_call("satellite tools", "satellite", "help")
+
+    def test_synthesis_intent(self):
+        self.assertTrue(
+            self.orch._wants_synthesis(
+                "Search the web for the latest Ollama release and summarize it."
+            )
+        )
+        self.assertTrue(
+            self.orch._wants_synthesis("Ping 8.8.8.8 and tell me the result.")
+        )
+        self.assertFalse(self.orch._wants_synthesis("Show me my system info."))
+
+    def test_parse_tool_call_accepts_hyphenated_skill_names(self):
+        self.assertEqual(
+            Tools.parse_tool_call("TOOL_CALL: daily-brief INPUT: (ignored)"),
+            ("daily-brief", "(ignored)"),
+        )
+
+
+if __name__ == "__main__":
+    unittest.main()

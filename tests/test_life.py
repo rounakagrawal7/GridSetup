@@ -133,11 +133,34 @@ class LifeEngineTests(unittest.TestCase):
         result = self.life.tick(later)
         self.assertEqual(result["summary"], "Commitment due")
 
-    def test_action_budget(self):
+    def test_action_budget_is_optional(self):
+        self.life.cfg["max_actions_per_day"] = 1
+        first = self.life.tick(self.now)
+        self.assertEqual(first["action"], "reflect")
+        second = self.life.tick(datetime(2026, 11, 24, 10, 1))
+        self.assertEqual(second["action"], "rest")
+        self.assertEqual(second["reason"], "daily action budget reached")
+
+    def test_zero_action_budget_means_unlimited(self):
         self.life.cfg["max_actions_per_day"] = 0
-        result = self.life.tick(self.now)
-        self.assertEqual(result["action"], "rest")
-        self.assertEqual(result["reason"], "daily action budget reached")
+        result = None
+        for minute in range(5):
+            result = self.life.tick(datetime(2026, 11, 24, 10, minute))
+        self.assertNotEqual(result.get("reason"), "daily action budget reached")
+
+    def test_quiet_hours_helpers(self):
+        self.life.cfg["quiet_hours"] = ["22:00", "08:00"]
+        late = datetime(2026, 11, 24, 23, 0)
+        self.assertTrue(self.life.in_quiet_hours(late))
+        self.assertEqual(self.life.seconds_until_quiet_end(late), 9 * 3600)
+        self.assertFalse(
+            self.life.in_quiet_hours(datetime(2026, 11, 24, 12, 0))
+        )
+
+    def test_self_goal_counter(self):
+        self.life.add_goal("Review my notes", created_by="self", now=self.now)
+        self.life.add_goal("User goal", now=self.now)
+        self.assertEqual(self.life.self_goals_today(self.now), 1)
 
     def test_goal_add_complete_and_persist(self):
         message = self.life.add_goal("Map the home network", now=self.now)

@@ -23,6 +23,8 @@ pb_data/
 pb_migrations/
 *.duckdb.wal
 *.duckdb.tmp
+run/
+logs/
 
 # Debug / temp inspection artifacts (repo-root only; tests/ is tracked)
 /test_*.py

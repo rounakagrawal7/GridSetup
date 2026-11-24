@@ -14,6 +14,17 @@ from typing import Optional, Dict, List, Any
 SKILLS_DIR = Path(__file__).parent / "skills"
 INDEX_FILE = SKILLS_DIR / "skills_index.json"
 
+
+def _live_tools():
+    """Return the Tools class of the running app, not a duplicate import."""
+    main = sys.modules.get("__main__")
+    candidate = getattr(main, "Tools", None)
+    if candidate is not None:
+        return candidate
+    from grid_agent import Tools
+    return Tools
+
+
 class SkillManager:
     def __init__(self):
         self.skills: Dict[str, dict] = {}
@@ -41,7 +52,7 @@ class SkillManager:
     # ── registration with Tools ────────────────────────────────
 
     def register_all(self):
-        from grid_agent import Tools
+        Tools = _live_tools()
         for name, info in self.skills.items():
             if name in Tools.registry:
                 continue
@@ -52,7 +63,7 @@ class SkillManager:
         Tools.SCHEMA = Tools._build_schema()
 
     def unregister(self, name: str):
-        from grid_agent import Tools
+        Tools = _live_tools()
         Tools.registry.pop(name, None)
         Tools.enabled.discard(name)
         Tools.SCHEMA = Tools._build_schema()
@@ -116,7 +127,7 @@ class SkillManager:
         self.skills[name] = entry
         self._save_index()
 
-        from grid_agent import Tools
+        Tools = _live_tools()
         fn = self._make_runner(name)
         Tools._reg(name, fn, description, input_desc)
         Tools.SCHEMA = Tools._build_schema()
@@ -135,7 +146,7 @@ class SkillManager:
         return f"Skill '{name}' deleted."
 
     def toggle(self, name: str) -> str:
-        from grid_agent import Tools
+        Tools = _live_tools()
         if name not in self.skills:
             return f"Error: skill '{name}' not found"
         current = self.skills[name].get("enabled", True)
@@ -181,7 +192,7 @@ class SkillManager:
 
     @staticmethod
     def call_skill(name: str, input_str: str) -> str:
-        from grid_agent import Tools
+        Tools = _live_tools()
         if name not in Tools.enabled:
             return f"Skill '{name}' is not enabled"
         return Tools.execute(name, input_str)
