@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="generator" content="grid-rea-demo">
+  <title>GRID REA Demo</title>
+  <link rel="stylesheet" href="/style.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <header>
+    <h1>GRID REA Demo</h1>
+    <p>A local page for authorized passive teardown testing.</p>
+  </header>
+
+  <main>
+    <section class="card">
+      <h2>Sign in</h2>
+      <form action="/login" method="post">
+        <label>Username <input name="username" autocomplete="username"></label>
+        <label>Password <input name="password" type="password" autocomplete="current-password"></label>
+        <button type="submit">Sign in</button>
+      </form>
+    </section>
+
+    <section class="card">
+      <h2>Links</h2>
+      <a href="/about">About</a>
+      <a href="/pricing">Pricing</a>
+    </section>
+
+    <section class="card">
+      <h2>Scroll area</h2>
+      <p id="scroll-status">not scrolled</p>
+      <p>Scroll down to trigger the lazy section.</p>
+    </section>
+
+    <div id="lazy-host"></div>
+    <div style="height: 2400px"></div>
+  </main>
+
+  <footer>GRID demo fixture</footer>
+  <script>
+    let loaded = false;
+    window.addEventListener('scroll', () => {
+      document.getElementById('scroll-status').textContent =
+        'scrollY=' + Math.round(window.scrollY);
+      if (!loaded && window.scrollY > 200) {
+        loaded = true;
+        const node = document.createElement('section');
+        node.className = 'card';
+        node.id = 'lazy-section';
+        node.textContent = 'Lazy section loaded after scrolling.';
+        document.getElementById('lazy-host').appendChild(node);
+      }
+    });
+  </script>
+</body>
+</html>
