@@ -45,3 +45,6 @@ ctf_range/
 
 # Game world state
 game_state/
+
+# IntelliJ project files
+clients/.idea/

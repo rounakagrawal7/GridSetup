@@ -1,3 +1,6 @@
+// Compose UI functions use PascalCase by convention.
+@file:Suppress("FunctionName")
+
 package ai.grid.desktop
 
 import ai.grid.shared.GridAgentClient
@@ -99,25 +102,27 @@ private sealed interface Item {
     data class Error(val message: String) : Item
 }
 
-fun main(args: Array<String>) = application {
-    val baseUrl = argument(args, "--url") ?: "http://127.0.0.1:8771"
-    val token = loadToken(args)
-    Window(
-        onCloseRequest = ::exitApplication,
-        title = "GRID",
-        state = rememberWindowState(width = 1180.dp, height = 820.dp),
-    ) {
-        MaterialTheme(
-            colorScheme = darkColorScheme(
-                primary = GridGreen,
-                onPrimary = Color.Black,
-                background = Background,
-                onBackground = Color.White,
-                surface = Panel,
-                onSurface = Color.White,
-            )
+fun main(args: Array<String>) {
+    application {
+        val baseUrl = argument(args, "--url") ?: "http://127.0.0.1:8771"
+        val token = loadToken(args)
+        Window(
+            onCloseRequest = ::exitApplication,
+            title = "GRID",
+            state = rememberWindowState(width = 1180.dp, height = 820.dp),
         ) {
-            App(baseUrl.trimEnd('/'), token)
+            MaterialTheme(
+                colorScheme = darkColorScheme(
+                    primary = GridGreen,
+                    onPrimary = Color.Black,
+                    background = Background,
+                    onBackground = Color.White,
+                    surface = Panel,
+                    onSurface = Color.White,
+                )
+            ) {
+                App(baseUrl.trimEnd('/'), token)
+            }
         }
     }
 }
