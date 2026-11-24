@@ -1,6 +1,6 @@
 # ADR-0002: KMP clients use AG-UI 1.0 and LAN pairing
 
-**Status:** proposed, gates the KMP scaffold
+**Status:** accepted 2026-11-25; gates the KMP scaffold
 **Date:** 2026-11-25
 **Owners:** GRID maintainers
 

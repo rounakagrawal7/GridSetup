@@ -354,6 +354,42 @@ or the host is private/lab (`localhost`, `127.0.0.1`, `*.local`, `*.test`, RFC19
 
 Reports are written to `refs/rea/<host>-<timestamp>/` (`report.md`, `manifest.json`, `network.json`, `headers.json`, `page.html`, plus `rea.json` and `screenshot.png` when the REA backend runs). The REA backend scrolls through the page before capture (PageDown steps, then back to the top) so lazy-loaded bundles, animations and network calls are included; set `security.rea.scroll_steps` to change the depth or `0` to disable. Install the backend once with `npm install -g rea-agents@6.10.1` (or point `security.rea.command` at a local copy). GRID will not download or execute npm code unless you explicitly set `security.rea.allow_npx` to `true`. If Node or Chrome is unavailable, the native fallback still produces a static report.
 
+### Local API for desktop and Android (`--api`)
+
+GRID can run as a loopback AG-UI host for the Kotlin clients:
+
+```powershell
+python grid_agent.py --api --no-input
+```
+
+The token is created at `run/api_token` (gitignored); every request needs `Authorization: Bearer <token>`. The default bind is `127.0.0.1:8771`. `--api` asks a running resident to hand over DuckDB, so use it as the host process while a desktop client is connected.
+
+Endpoints:
+
+| Method | Path | Purpose |
+|---|---|---|
+| `GET` | `/api/v1/health` | protocol, model, thread/report counts |
+| `GET` | `/api/v1/threads` | thread summaries |
+| `GET` | `/api/v1/threads/<id>` | stored messages |
+| `POST` | `/api/v1/agent` | `RunAgentInput`; returns an SSE stream |
+| `POST` | `/api/v1/approvals/<id>` | approve or deny a dangerous tool |
+| `GET` | `/api/v1/rea/reports` | teardown artifacts |
+| `GET` | `/api/v1/rea/reports/<id>` | report manifest + Markdown |
+| `GET` | `/api/v1/rea/reports/<id>/screenshot` | PNG preview |
+
+The stream follows AG-UI 1.0: `RUN_STARTED`, `STEP_STARTED`, `TEXT_MESSAGE_*`, `TOOL_CALL_*`, `ACTIVITY_*`, `CUSTOM`, `STEP_FINISHED`, `RUN_FINISHED`. Dangerous tools emit `CUSTOM grid.approval_required` and wait for the approval endpoint. REA results emit `CUSTOM grid.artifact` with the report path.
+
+Config:
+
+```json
+"api": {
+  "host": "127.0.0.1",
+  "port": 8771,
+  "token_file": "run/api_token",
+  "threads_file": "run/api_threads.json"
+}
+```
+
 ### Context compression
 
 Optional Headroom support compresses only non-system history/tool messages; the system prompt and tool names stay intact:
@@ -436,6 +472,7 @@ The `email` section must already have working SMTP settings. With `mode: "auto"`
 | `grid_life.py` | Persistent identity, goals, commitments, heartbeat and iLog |
 | `grid_awake.py` | Autopilot, step display and double-Esc cancel |
 | `grid_resident.py` | Always-on resident, loopback control surface and app handoff |
+| `grid_api.py` | Local AG-UI HTTP/SSE API for desktop and Android clients |
 | `tools/` | Optional profile backfill, pilot harness and boot-window logger |
 | `grid_permissions.py` | Ask/auto/read-only policy for autonomous tool use |
 | `grid_docs.py` | `document_read` + optional MarkItDown |

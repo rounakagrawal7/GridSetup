@@ -44,6 +44,12 @@
       "timeout_seconds": 300
     }
   },
+  "api": {
+    "host": "127.0.0.1",
+    "port": 8771,
+    "token_file": "run/api_token",
+    "threads_file": "run/api_threads.json"
+  },
   "mcp_servers": {},
   "email": {
     "smtp_server": "",

@@ -4,6 +4,7 @@ Ollama, LM Studio & OpenRouter backends. Web, network, system tools, streaming, 
 """
 
 import argparse
+import contextvars
 import json
 import os
 import random
@@ -1004,6 +1005,31 @@ _LOCATIONS = {
     "santiago", "lima", "bogota", "caracas", "buenos_aires",
 }
 
+# ── per-request hooks for the local AG-UI API ─────────────────
+_EVENT_SINK = contextvars.ContextVar("grid_event_sink", default=None)
+_POLICY_OVERRIDE = contextvars.ContextVar("grid_policy_override", default=None)
+
+
+def set_event_sink(sink):
+    """Route tool activity to a client stream for the current context."""
+    _EVENT_SINK.set(sink)
+
+
+def set_policy_override(policy):
+    """Use a request-scoped permission policy without mutating global state."""
+    _POLICY_OVERRIDE.set(policy)
+
+
+def emit_event(event: Dict[str, Any]) -> None:
+    sink = _EVENT_SINK.get()
+    if sink is None:
+        return
+    try:
+        sink(event)
+    except Exception:
+        pass
+
+
 class Tools:
     registry: Dict[str, Dict] = {}
     enabled: set = set()
@@ -1031,8 +1057,9 @@ class Tools:
     def safe_execute(tool_name: str, tool_input: str) -> str:
         if Tools.cancel_token is not None and Tools.cancel_token.is_set():
             return "Cancelled by user."
-        if Tools.policy is not None:
-            allowed, reason = Tools.policy.allow(tool_name, tool_input)
+        policy = _POLICY_OVERRIDE.get() or Tools.policy
+        if policy is not None:
+            allowed, reason = policy.allow(tool_name, tool_input)
             if not allowed:
                 return f"[Blocked] {tool_name}: {reason}"
         try:
@@ -3950,10 +3977,48 @@ Comment Data:
             else:
                 Tools._last_tool = tool_name
                 Tools._last_input = tool_input
+            call_id = f"call_{uuid.uuid4().hex[:12]}"
+            emit_event(
+                {
+                    "type": "TOOL_CALL_START",
+                    "toolCallId": call_id,
+                    "toolCallName": tool_name,
+                }
+            )
+            emit_event(
+                {
+                    "type": "TOOL_CALL_ARGS",
+                    "toolCallId": call_id,
+                    "delta": json.dumps({"input": tool_input}, ensure_ascii=False),
+                }
+            )
+            emit_event({"type": "TOOL_CALL_END", "toolCallId": call_id})
             start = time.time()
             result = info["fn"](tool_input)
             if isinstance(result, str):
                 result = ANSI_ESCAPE_RE.sub("", result)
+            emit_event(
+                {
+                    "type": "TOOL_CALL_RESULT",
+                    "messageId": f"msg_{uuid.uuid4().hex[:12]}",
+                    "toolCallId": call_id,
+                    "content": (result or "")[:16000],
+                }
+            )
+            if tool_name == "rea":
+                reported = re.search(r"^Report:\s*(.+)$", result or "", re.M)
+                if reported:
+                    emit_event(
+                        {
+                            "type": "CUSTOM",
+                            "name": "grid.artifact",
+                            "value": {
+                                "kind": "rea_report",
+                                "path": reported.group(1).strip(),
+                                "tool": tool_name,
+                            },
+                        }
+                    )
             duration = int((time.time() - start) * 1000)
             if Tools.db:
                 is_error = result.startswith("Error:") or result.startswith("[Error:")
@@ -5667,6 +5732,11 @@ def main(argv=None):
         action="store_true",
         help="run the always-on GRID Life resident without a UI",
     )
+    parser.add_argument(
+        "--api",
+        action="store_true",
+        help="run the local AG-UI HTTP API for desktop and Android clients",
+    )
     args = parser.parse_args(argv)
 
     if args.resident:
@@ -5990,6 +6060,14 @@ def main(argv=None):
             except Exception:
                 pass
         atexit.register(_resume_resident)
+
+    if args.api:
+        try:
+            from grid_api import run_api
+            return run_api(orchestrator, console, load_config(), tools=Tools)
+        except Exception as e:
+            console.print(f"  [red]API error: {e}[/]")
+            return 1
 
     if args.resident:
         try:

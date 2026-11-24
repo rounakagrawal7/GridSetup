@@ -23,6 +23,10 @@
 - `rea` is classified dangerous, so it always asks. The registry grows to 81
   tools; 25 new tests cover authorization, parsing, redaction, routing and the
   local teardown path (137 tests total, 51 routing evals).
+- New `--api` host: a loopback AG-UI 1.0 endpoint over HTTP+SSE with bearer
+  auth, thread storage, live tool/activity events, approval requests and REA
+  report endpoints. The API resolves the live `__main__` tools so events and
+  request-scoped policies work in the real process (149 tests total).
 
 ## v3.1 - always alive
 

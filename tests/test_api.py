@@ -1,0 +1,278 @@
+import json
+import tempfile
+import threading
+import unittest
+from pathlib import Path
+
+import requests
+
+import grid_agent
+from grid_api import GridAPIServer, ThreadStore
+from grid_agent import Tools
+
+
+class FakeBackend:
+    type = "ollama"
+    model = "fake-model"
+
+
+class FakeOrchestrator:
+    backend = FakeBackend()
+
+    def __init__(self):
+        self.prompts = []
+
+    def process(self, prompt, stream=True):
+        self.prompts.append(prompt)
+        return f"echo: {prompt}"
+
+
+class APITestCase(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        self.refs = self.root / "rea"
+        self.orch = FakeOrchestrator()
+        self.server = GridAPIServer(
+            self.orch,
+            config={"permissions": {"mode": "read_only"}},
+            token="test-token",
+            host="127.0.0.1",
+            port=0,
+            thread_store=ThreadStore(self.root / "threads.json"),
+            refs_dir=self.refs,
+        )
+        self.assertTrue(self.server.start())
+        self.base = f"http://127.0.0.1:{self.server.port}/api/v1"
+        self.headers = {"Authorization": "Bearer test-token"}
+
+    def tearDown(self):
+        self.server.stop()
+        self.tmp.cleanup()
+
+    def _events(self, payload):
+        events = []
+        with requests.post(
+            f"{self.base}/agent",
+            json=payload,
+            headers=self.headers,
+            stream=True,
+            timeout=10,
+        ) as response:
+            self.assertEqual(response.status_code, 200)
+            for line in response.iter_lines(decode_unicode=True):
+                if not line or not line.startswith("data: "):
+                    continue
+                event = json.loads(line[len("data: "):])
+                events.append(event)
+                if event.get("type") in ("RUN_FINISHED", "RUN_ERROR"):
+                    break
+        return events
+
+    def test_requires_bearer_token(self):
+        self.assertEqual(requests.get(f"{self.base}/health").status_code, 401)
+        self.assertEqual(
+            requests.get(
+                f"{self.base}/health", headers={"Authorization": "Bearer wrong"}
+            ).status_code,
+            401,
+        )
+        self.assertEqual(
+            requests.get(f"{self.base}/health", headers=self.headers).status_code, 200
+        )
+
+    def test_health_reports_protocol(self):
+        payload = requests.get(f"{self.base}/health", headers=self.headers).json()
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["protocol"], "1.0")
+        self.assertEqual(payload["model"], "fake-model")
+
+    def test_run_stream_follows_agui_shape(self):
+        events = self._events(
+            {
+                "threadId": "thr_test",
+                "runId": "run_test",
+                "messages": [{"id": "m1", "role": "user", "content": "hello"}],
+            }
+        )
+        types = [event["type"] for event in events]
+        self.assertEqual(types[0], "RUN_STARTED")
+        self.assertEqual(events[0]["threadId"], "thr_test")
+        self.assertEqual(events[0]["runId"], "run_test")
+        self.assertEqual(events[0]["protocolVersion"], "1.0")
+        self.assertIn("STEP_STARTED", types)
+        self.assertIn("TEXT_MESSAGE_START", types)
+        self.assertIn("TEXT_MESSAGE_CONTENT", types)
+        self.assertIn("TEXT_MESSAGE_END", types)
+        self.assertIn("STEP_FINISHED", types)
+        self.assertEqual(types[-1], "RUN_FINISHED")
+        self.assertEqual(events[-1]["outcome"], {"type": "success"})
+        content = next(
+            event["delta"]
+            for event in events
+            if event["type"] == "TEXT_MESSAGE_CONTENT"
+        )
+        self.assertEqual(content, "echo: hello")
+        for event in events:
+            self.assertIn("timestamp", event)
+        self.assertEqual(self.orch.prompts, ["hello"])
+
+    def test_threads_are_persisted(self):
+        self._events(
+            {
+                "threadId": "thr_persist",
+                "messages": [{"id": "m1", "role": "user", "content": "remember this"}],
+            }
+        )
+        listing = requests.get(f"{self.base}/threads", headers=self.headers).json()
+        self.assertEqual(listing["threads"][0]["id"], "thr_persist")
+        detail = requests.get(
+            f"{self.base}/threads/thr_persist", headers=self.headers
+        ).json()
+        self.assertEqual(detail["thread"]["messages"][-1]["role"], "assistant")
+        self.assertIn("remember this", detail["thread"]["messages"][-1]["content"])
+
+    def test_rejects_missing_user_message(self):
+        response = requests.post(
+            f"{self.base}/agent",
+            json={"threadId": "thr_x", "messages": []},
+            headers=self.headers,
+            timeout=5,
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("user message", response.json()["error"])
+
+    def test_rejects_bad_thread_id(self):
+        response = requests.post(
+            f"{self.base}/agent",
+            json={
+                "threadId": "../escape",
+                "messages": [{"role": "user", "content": "hello"}],
+            },
+            headers=self.headers,
+            timeout=5,
+        )
+        self.assertEqual(response.status_code, 400)
+
+    def test_rea_report_listing_and_detail(self):
+        directory = self.refs / "example.com-20260101-000000"
+        directory.mkdir(parents=True)
+        (directory / "manifest.json").write_text(
+            json.dumps(
+                {
+                    "target": "https://example.com",
+                    "host": "example.com",
+                    "generated_at": "2026-01-01T00:00:00",
+                    "backend": "rea",
+                    "authorization": "explicit",
+                    "counts": {"endpoints": 3},
+                }
+            ),
+            encoding="utf-8",
+        )
+        (directory / "report.md").write_text("# Teardown\n\nbody", encoding="utf-8")
+        (directory / "screenshot.png").write_bytes(b"\x89PNG\r\n")
+        listing = requests.get(
+            f"{self.base}/rea/reports", headers=self.headers
+        ).json()
+        self.assertEqual(listing["reports"][0]["id"], directory.name)
+        detail = requests.get(
+            f"{self.base}/rea/reports/{directory.name}", headers=self.headers
+        ).json()
+        self.assertIn("# Teardown", detail["report"]["report"])
+        shot = requests.get(
+            f"{self.base}/rea/reports/{directory.name}/screenshot",
+            headers=self.headers,
+        )
+        self.assertEqual(shot.status_code, 200)
+        self.assertEqual(shot.headers["Content-Type"], "image/png")
+
+    def test_rea_report_rejects_traversal(self):
+        response = requests.get(
+            f"{self.base}/rea/reports/..%2Fsecret", headers=self.headers
+        )
+        self.assertEqual(response.status_code, 404)
+
+    def test_approval_decision_wakes_waiter(self):
+        event = threading.Event()
+        self.server._approvals["apr_test"] = {"event": event, "decision": ""}
+        code, payload = self.server._handle_approval(
+            "apr_test", {"decision": "approve"}
+        )
+        self.assertEqual(code, 200)
+        self.assertTrue(event.is_set())
+        self.assertEqual(payload["decision"], "approve")
+
+
+class ToolEventTests(unittest.TestCase):
+    def setUp(self):
+        self.events = []
+        self._saved_registry = dict(Tools.registry)
+        self._saved_enabled = set(Tools.enabled)
+
+    def tearDown(self):
+        Tools.registry.clear()
+        Tools.registry.update(self._saved_registry)
+        Tools.enabled.clear()
+        Tools.enabled.update(self._saved_enabled)
+        grid_agent.set_event_sink(None)
+        grid_agent.set_policy_override(None)
+
+    def _register(self, name, fn):
+        Tools.registry[name] = {
+            "fn": fn,
+            "desc": "test tool",
+            "input_desc": "input",
+        }
+        Tools.enabled.add(name)
+
+    def test_execute_emits_tool_call_and_result(self):
+        self._register("fake_echo", lambda text: f"echo: {text}")
+        grid_agent.set_event_sink(self.events.append)
+        result = Tools.execute("fake_echo", "hello")
+        self.assertEqual(result, "echo: hello")
+        types = [event["type"] for event in self.events]
+        self.assertEqual(
+            types[:4],
+            [
+                "TOOL_CALL_START",
+                "TOOL_CALL_ARGS",
+                "TOOL_CALL_END",
+                "TOOL_CALL_RESULT",
+            ],
+        )
+        call_id = self.events[0]["toolCallId"]
+        self.assertTrue(all(event.get("toolCallId") == call_id for event in self.events))
+        self.assertEqual(self.events[0]["toolCallName"], "fake_echo")
+        self.assertEqual(self.events[3]["content"], "echo: hello")
+
+    def test_rea_result_emits_artifact_event(self):
+        self._register(
+            "rea",
+            lambda _text: "REA complete\nReport: refs/rea/example/report.md",
+        )
+        grid_agent.set_event_sink(self.events.append)
+        Tools.execute("rea", "authorized https://example.com")
+        artifacts = [
+            event for event in self.events if event.get("type") == "CUSTOM"
+        ]
+        self.assertEqual(artifacts[0]["name"], "grid.artifact")
+        self.assertEqual(
+            artifacts[0]["value"]["path"], "refs/rea/example/report.md"
+        )
+
+    def test_policy_override_blocks_without_mutating_global_policy(self):
+        self._register("fake_echo", lambda text: f"echo: {text}")
+
+        class Deny:
+            def allow(self, _name, _input):
+                return False, "requires approval"
+
+        grid_agent.set_policy_override(Deny())
+        result = Tools.safe_execute("fake_echo", "hello")
+        self.assertIn("[Blocked]", result)
+        self.assertIsNone(Tools.policy)
+
+
+if __name__ == "__main__":
+    unittest.main()
