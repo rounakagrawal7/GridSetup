@@ -43,6 +43,12 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.isShiftPressed
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -209,20 +215,14 @@ private fun App(baseUrl: String, token: String) {
     }
 
     fun resolveApproval(index: Int, approval: Item.Approval, decision: String) {
-        try {
-            File("../run/desktop_approvals.log").appendText(
-                "${System.currentTimeMillis()} resolve ${approval.id} $decision\n"
-            )
-        } catch (_: Exception) {
-            // Diagnostics must never block the approval.
-        }
+        if (approval.resolved) return
+        items[index] = approval.copy(resolved = true)
         scope.launch {
             val ok = withContext(Dispatchers.IO) {
                 postApproval(baseUrl, token, approval.id, decision)
             }
-            if (ok) {
-                items[index] = approval.copy(resolved = true)
-            } else {
+            if (!ok) {
+                items[index] = approval.copy(resolved = false)
                 items.add(Item.Error("Approval request failed. Is GRID --api still running?"))
             }
         }
@@ -523,7 +523,19 @@ private fun Composer(
         OutlinedTextField(
             value = input,
             onValueChange = onInput,
-            modifier = Modifier.weight(1f),
+            modifier = Modifier.weight(1f).onKeyEvent { event ->
+                if (
+                    enabled && !busy &&
+                    event.type == KeyEventType.KeyDown &&
+                    event.key == Key.Enter &&
+                    !event.isShiftPressed
+                ) {
+                    onSend()
+                    true
+                } else {
+                    false
+                }
+            },
             placeholder = { Text("Ask GRID, run a tool, or request a teardown…", color = Muted) },
             maxLines = 4,
             enabled = enabled,
