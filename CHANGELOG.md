@@ -1,5 +1,26 @@
 ﻿# Changelog
 
+## v3.2 - authorized reverse-engineering (in progress)
+
+- New `rea` tool: passive teardown of a web target you own or are explicitly
+  authorized to test. Captures DOM and screenshot (via REA), network requests,
+  API endpoint strings, third-party origins, stack fingerprints, security
+  headers, cookies and redacted secret patterns.
+- Authorization gate before any request: `rea authorized <url>`, the
+  `security.authorized_targets` allowlist (`/rea authorize`, `/rea revoke`,
+  `/rea list`), or private/lab hosts. Public targets without authorization are
+  refused.
+- Optional `rea-agents` backend: use an installed `rea` CLI or
+  `security.rea.command`; setting `security.rea.allow_npx` to `true` permits a
+  pinned `npx` download. A native BeautifulSoup/requests fallback runs when Node
+  or a Chrome-family browser is missing.
+- Reports land in `refs/rea/<host>-<timestamp>/`: `report.md`, `manifest.json`,
+  `network.json`, `headers.json`, `page.html`, plus `rea.json` and
+  `screenshot.png` from the REA backend. Secrets are truncated in the report.
+- `rea` is classified dangerous, so it always asks. The registry grows to 81
+  tools; 23 new tests cover authorization, parsing, redaction, routing and the
+  local teardown path (135 tests total, 51 routing evals).
+
 ## v3.1 - always alive
 
 - `/life` no longer stops when the daily throttle is reached. The action budget

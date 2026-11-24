@@ -1219,6 +1219,13 @@ class Tools:
             return f"Error: {e}"
 
     @staticmethod
+    def _rea(input_str: str) -> str:
+        from grid_rea import run_teardown
+
+        security = load_config().get("security") or {}
+        return run_teardown(input_str, security)
+
+    @staticmethod
     def _web_search(query: str) -> str:
         query = query.strip()
         if not query:
@@ -4078,6 +4085,7 @@ Tools._reg("list_directory",   Tools._list_directory,   "List files and folders 
 Tools._reg("get_cwd",          Tools._get_cwd,          "Show the current working directory", "(ignored)")
 Tools._reg("web_fetch",        Tools._web_fetch,        "Fetch a web page and return its text content", "full URL to fetch")
 Tools._reg("web_search",       Tools._web_search,       "Search the web using DuckDuckGo", "search query string")
+Tools._reg("rea",              Tools._rea,              "Authorized passive reverse-engineering teardown of a web target. Use 'rea authorized <url>' or add the host to security.authorized_targets. Writes a Markdown report to refs/rea/.", "authorized <url> | <url>")
 Tools._reg("ping",             Tools._ping,             "Ping a host to check connectivity", "hostname or IP")
 Tools._reg("nmap_scan",        Tools._nmap_scan,        "Run Nmap scan (fast by default; supports -sV -A -O -sC -p --script= -T0-5)", "target [optional flags]")
 Tools._reg("netstat",          Tools._netstat,          "Show active network connections", "(ignored)")
@@ -4207,7 +4215,8 @@ class GridOrchestrator:
             "2. FILE OPERATIONS: read_file, write_file, delete_file, create_directory, "
             "list_directory, file_search (glob pattern), get_cwd.\n\n"
             "3. SHELL: run_command (execute any terminal command).\n\n"
-            "4. WEB: web_search (DuckDuckGo), web_fetch (get page text), http_request (HTTP GET/POST/etc).\n\n"
+            "4. WEB: web_search (DuckDuckGo), web_fetch (get page text), http_request (HTTP GET/POST/etc), "
+            "rea (authorized passive reverse-engineering teardown: 'rea authorized <url>', writes refs/rea/ report).\n\n"
             "5. NETWORK: ping, dns_lookup, netstat, nmap_scan (with -sV -A -O -sC -p --script= flags).\n\n"
             "6. NETCAT SUITE: nc_listen (TCP/UDP listener), nc_connect (client), nc_scan (port scanner), "
             "nc_banner_grab, nc_transfer (file send/recv), nc_proxy (forwarder), nc_chat (chat with --llm).\n\n"
@@ -4495,9 +4504,17 @@ class GridOrchestrator:
 
         # Direct hit: exact tool name mentioned at start. Prefer the longest
         # match so "screenshot ocr" wins over "screenshot".
+        def _prefix_hit(name: str) -> bool:
+            for form in (name, name.replace("_", " ")):
+                if inp.startswith(form):
+                    nxt = inp[len(form):len(form) + 1]
+                    if not nxt or not (nxt.isalnum() or nxt == "_"):
+                        return True
+            return False
+
         matches = [
             name for name in Tools.registry
-            if inp.startswith(name) or inp.startswith(name.replace("_", " "))
+            if _prefix_hit(name)
         ]
         if matches:
             tool_name = max(matches, key=len)
@@ -4531,6 +4548,7 @@ class GridOrchestrator:
             (r"(?:what is|what's|get|show)\s+(?:the )?weather\s+(?:in |for |at )?(.+)", "weather", "{0}"),
             (r"(?:search|google|look up)\s+(?:the web|the internet|web)?\s*(.+)", "web_search",
              lambda m: re.sub(r"^(?:online\s+)?(?:about|for|on)\s+", "", m.group(1).strip(), flags=re.I)),
+            (r"^(?:rea|reverse[- ]?engineer|tear\s*down)\s+(.+)$", "rea", "{0}"),
             (r"dork\s+(?:for|search|query)?\s*(.+)", "dork", "{0}"),
             (r"(?:run|use|try)\s+a?\s*(?:google\s+)?dork\s+(.+)", "dork", "{0}"),
             (r"(?:ghostcam|omnieye|ghost.cam)\s*(start|stop|launch|kill)?", "ghostcam", "{0}"),
@@ -5277,6 +5295,7 @@ SLASH_COMMANDS = {
     "/persona": "Set/view/clear your GRID identity",
     "/plan": "Toggle planner mode (step-by-step)",
     "/ref": "Read a full offloaded tool output",
+    "/rea": "Authorized reverse-engineering teardown",
     "/save": "Save conversation now",
     "/social": "Moltbook social platform",
     "/tools": "View & toggle tools",
@@ -5291,6 +5310,7 @@ SLASH_SUBCOMMANDS = {
     "/jobs": ["list", "new", "show", "edit", "toggle", "delete"],
     "/life": [],
     "/memory": ["status", "clear"],
+    "/rea": ["status", "list", "authorize", "revoke", "help"],
     "/pb": ["start", "stop", "install", "sync"],
     "/persona": ["set", "clear"],
     "/social": ["auto", "daemon", "history"],
@@ -6560,6 +6580,60 @@ def main(argv=None):
                                 console.print(f"  [{M_DIM}]Usage: /life [status|help|awake|wake|tick|log|goals|goal|commitments|commitment|pause|resume|identity][/]\n")
                         except Exception as e:
                             console.print(f"  [red]GRID Life error: {e}[/]\n")
+                        continue
+
+                    if cmd == "/rea" or cmd.startswith("/rea "):
+                        from grid_rea import (
+                            authorize_host,
+                            list_allowlist,
+                            revoke_host,
+                        )
+
+                        raw_rea = user_input.strip()
+                        body = raw_rea[len("/rea"):].strip()
+                        sub, _, arg = body.partition(" ")
+                        sub = sub.lower()
+                        security = load_config().get("security") or {}
+                        if not body or sub in ("help", "status"):
+                            console.print(f"""  [{M}]GRID REA — authorized passive teardown[/]
+  /rea <url>                 inspect a site (must be authorized)
+  /rea authorized <url>      one-off explicit authorization
+  /rea authorize <host>      add a host to the allowlist
+  /rea revoke <host>         remove a host
+  /rea list                  show the allowlist
+""")
+                            console.print(f"  [{M_DIM}]{list_allowlist(security)}[/]\n")
+                            continue
+                        if sub == "list":
+                            console.print(f"  [{M}]{list_allowlist(security)}[/]\n")
+                            continue
+                        if sub == "authorize":
+                            if not arg.strip():
+                                console.print(f"  [{M_DIM}]Usage: /rea authorize <host>[/]\n")
+                                continue
+                            security, message = authorize_host(security, arg.strip())
+                            save_config({"security": security})
+                            console.print(f"  [{M}]{message}[/]\n")
+                            continue
+                        if sub == "revoke":
+                            if not arg.strip():
+                                console.print(f"  [{M_DIM}]Usage: /rea revoke <host>[/]\n")
+                                continue
+                            security, message = revoke_host(security, arg.strip())
+                            save_config({"security": security})
+                            console.print(f"  [{M}]{message}[/]\n")
+                            continue
+                        console.print(
+                            f"  [{M}]Running authorized passive teardown...[/]"
+                        )
+                        result = Tools.execute("rea", body)
+                        console.print(Panel(
+                            result,
+                            title=f"[bold {M}]GRID REA[/]",
+                            border_style=M,
+                            padding=(0, 1),
+                        ))
+                        console.print()
                         continue
 
                     if cmd in ("/memory", "/memory show") or cmd.startswith("/memory "):

@@ -47,5 +47,7 @@
   {"query": "satellite iss", "tool": "satellite", "input": "iss"},
   {"query": "micro help", "tool": "micro", "input": "help"},
   {"query": "ctf help", "tool": "ctf", "input": "help"},
-  {"query": "game help", "tool": "game", "input": "help"}
+  {"query": "game help", "tool": "game", "input": "help"},
+  {"query": "rea authorized https://example.com", "tool": "rea", "input": "authorized https://example.com"},
+  {"query": "reverse engineer https://example.com", "tool": "rea", "input": "https://example.com"}
 ]

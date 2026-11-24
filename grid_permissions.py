@@ -43,7 +43,7 @@ DANGEROUS: Set[str] = {
     "delete_file", "delete_skill", "mouse_click", "mouse_move",
     "mouse_scroll", "nc_chat", "nc_listen", "nc_proxy", "press_keys",
     "process_manager", "run_code", "run_command", "type_text",
-    "nuclei_scan", "pio_build",
+    "nuclei_scan", "pio_build", "rea",
 }
 
 RISK_LABELS = {

@@ -70,7 +70,7 @@ The profile refuses credentials, API keys, passwords and secrets. You can also e
 
 GRID isn't another messaging tool for one AI. It's the **only agent that fuses a full OSINT / field-ops stack directly to a human-like memory**. Hermes and OpenClaw give you a *chat brain* with toys bolted on — GRID ships as a **recon dashboard, a radio rig, a satellite dish, a camera lab, and a microcontroller bench**, all in one terminal. And it does it with **1 file to run** (`python grid_agent.py`), **local-first operation**, and **80+ built-in tools / 100+ sub-commands**.
 
-| Capability | **GRID (v3) - 80+ tools** | Hermes | OpenClaw |
+| Capability | **GRID (v3) - 81 tools** | Hermes | OpenClaw |
 |---|---|---|---|
 | 🧠 **4-tier memory** (user profile · scenarios · atoms · offloaded refs) | ✅ built-in, auto-distills every 5 turns | ⚠️ SQLite + user modeling | ⚠️ file-based marks/YAML |
 | 🔍 **OSINT** (domain/IP/email/phone/username, dorking, webcam/CCTV) | ✅ **built-in** | ❌ none | ⚠️ web-search only |
@@ -178,7 +178,7 @@ An explicit `/life pause` still wins. Advanced subcommands (`status`, `log`, `go
 
 GRID Life uses the same identity as `/persona`. If you set `/persona set TinaGrid`, then:
 - `/life` starts as TinaGrid and knows `Moltbook as TinaGrid`;
-- its prompt includes the persona, the persistent Moltbook history, and the full 80-tool registry;
+- its prompt includes the persona, the persistent Moltbook history, and the full 81-tool registry;
 - `/persona clear` resets the life identity to `GRID` and asks again on the next `/life`.
 
 If no persona is set, `/life` asks for a name first. It also asks what to work on if there are no active goals.
@@ -326,10 +326,33 @@ and add `"cwd": "C:\\repos\\Grid_Agent\\GridSetup"` to that server in `~/.config
 |---|---|---|
 | `sherlock_scan` | `pip install sherlock-project` | Username search across public sites |
 | `nuclei_scan` | Nuclei binary on PATH | Requires input prefixed with `authorized`; dangerous, always asks |
+| `rea` | Optional: Node 22.23.4+ and a Chrome-family browser (uses `rea-agents`) | Authorized passive site teardown; native fallback without Node |
 | `pio_build` | `pip install platformio` | ESP32/Arduino build; build scripts are code, so it asks |
 | `pystray` | `pip install pystray` | System tray host |
 
 `--install-missing` installs the Python packages. Nuclei is a separate binary.
+
+### Authorized reverse-engineering (`rea`)
+
+`rea` performs a **passive** teardown of a web target you own or have written permission to test: page DOM and screenshot, network requests, API endpoint strings, third-party origins, stack fingerprints, security headers, cookies and redacted secret patterns. It never exploits, fuzzes, logs in or calls discovered APIs.
+
+Authorization is required. A target is accepted only when one of these is true:
+
+```text
+rea authorized https://staging.example.com     # explicit one-off
+/rea authorize staging.example.com             # add to config.json allowlist
+```
+
+or the host is private/lab (`localhost`, `127.0.0.1`, `*.local`, `*.test`, RFC1918). Everything else is refused before any request is made. The allowlist lives in `config.json`:
+
+```json
+"security": {
+  "authorized_targets": ["staging.example.com", "*.lab.example"],
+  "rea": { "enabled": true, "command": "", "browser": "", "allow_npx": false, "timeout_seconds": 300 }
+}
+```
+
+Reports are written to `refs/rea/<host>-<timestamp>/` (`report.md`, `manifest.json`, `network.json`, `headers.json`, `page.html`, plus `rea.json` and `screenshot.png` when the REA backend runs). Install the backend once with `npm install -g rea-agents@6.10.1` (or point `security.rea.command` at a local copy). GRID will not download or execute npm code unless you explicitly set `security.rea.allow_npx` to `true`. If Node or Chrome is unavailable, the native fallback still produces a static report.
 
 ### Context compression
 

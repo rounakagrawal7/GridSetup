@@ -33,6 +33,16 @@
     "auto_approve": [],
     "deny": []
   },
+  "security": {
+    "authorized_targets": [],
+    "rea": {
+      "enabled": true,
+      "command": "",
+      "browser": "",
+      "allow_npx": false,
+      "timeout_seconds": 300
+    }
+  },
   "mcp_servers": {},
   "email": {
     "smtp_server": "",

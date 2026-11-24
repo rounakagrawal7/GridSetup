@@ -89,7 +89,7 @@ class DocumentReadTests(unittest.TestCase):
         import grid_agent
 
         self.assertIn("document_read", grid_agent.Tools.registry)
-        self.assertEqual(len(grid_agent.Tools.registry), 80)
+        self.assertEqual(len(grid_agent.Tools.registry), 81)
 
 
 if __name__ == "__main__":
