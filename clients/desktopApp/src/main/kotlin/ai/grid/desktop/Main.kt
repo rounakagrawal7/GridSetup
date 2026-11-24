@@ -67,11 +67,12 @@ import java.net.http.HttpRequest
 import java.net.http.HttpResponse
 import java.nio.file.Files
 import java.nio.file.Path
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlin.time.Duration.Companion.milliseconds
 
 private val Background = Color(0xFF0B0F0C)
 private val Panel = Color(0xFF111813)
@@ -211,6 +212,8 @@ private fun App(baseUrl: String, token: String) {
         scope.launch {
             try {
                 client.run(prompt, threadId).collect { handle(it) }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
             } catch (error: Exception) {
                 items.add(Item.Error(error.message ?: error.toString()))
                 status = "Error"
@@ -474,7 +477,7 @@ private fun ApprovalCard(
 ) {
     var armed by remember(approval.id) { mutableStateOf(false) }
     LaunchedEffect(approval.id) {
-        delay(600)
+        delay(600.milliseconds)
         armed = true
     }
     Card(
