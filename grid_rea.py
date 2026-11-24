@@ -233,7 +233,42 @@ def _rea_command(rea_cfg: Dict[str, Any]) -> Optional[List[str]]:
     return None
 
 
-def build_scenario(target: Target, browser: str) -> Dict[str, Any]:
+def build_scenario(target: Target, browser: str, scroll_steps: int = 4) -> Dict[str, Any]:
+    try:
+        steps = max(0, min(int(scroll_steps), 12))
+    except (TypeError, ValueError):
+        steps = 4
+    actions: List[Dict[str, Any]] = [
+        {"step_id": "settle", "action": "wait_for_timeout", "duration_ms": 1200}
+    ]
+    for index in range(steps):
+        actions.append(
+            {
+                "step_id": f"scroll-{index + 1}",
+                "action": "press",
+                "locator": {"kind": "css", "selector": "body"},
+                "key": "PageDown",
+            }
+        )
+        actions.append(
+            {
+                "step_id": f"scroll-wait-{index + 1}",
+                "action": "wait_for_timeout",
+                "duration_ms": 600,
+            }
+        )
+    if steps:
+        actions.append(
+            {
+                "step_id": "scroll-top",
+                "action": "press",
+                "locator": {"kind": "css", "selector": "body"},
+                "key": "Home",
+            }
+        )
+        actions.append(
+            {"step_id": "scroll-top-wait", "action": "wait_for_timeout", "duration_ms": 500}
+        )
     return {
         "browser": {
             "mode": "launch",
@@ -241,9 +276,7 @@ def build_scenario(target: Target, browser: str) -> Dict[str, Any]:
             "headless": True,
         },
         "start_url": {"url": target.url},
-        "actions": [
-            {"step_id": "settle", "action": "wait_for_timeout", "duration_ms": 1500}
-        ],
+        "actions": actions,
         "environment": {
             "viewport": {"width": 1280, "height": 720, "device_scale_factor": 1},
             "locale": "en-US",
@@ -281,7 +314,10 @@ def _run_rea(
         )
     scenario_path = report_dir / "scenario.json"
     scenario_path.write_text(
-        json.dumps(build_scenario(target, browser), indent=2),
+        json.dumps(
+            build_scenario(target, browser, rea_cfg.get("scroll_steps", 4)),
+            indent=2,
+        ),
         encoding="utf-8",
     )
     timeout = int(rea_cfg.get("timeout_seconds", 300) or 300)

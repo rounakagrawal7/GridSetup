@@ -348,11 +348,11 @@ or the host is private/lab (`localhost`, `127.0.0.1`, `*.local`, `*.test`, RFC19
 ```json
 "security": {
   "authorized_targets": ["staging.example.com", "*.lab.example"],
-  "rea": { "enabled": true, "command": "", "browser": "", "allow_npx": false, "timeout_seconds": 300 }
+  "rea": { "enabled": true, "command": "", "browser": "", "allow_npx": false, "scroll_steps": 4, "timeout_seconds": 300 }
 }
 ```
 
-Reports are written to `refs/rea/<host>-<timestamp>/` (`report.md`, `manifest.json`, `network.json`, `headers.json`, `page.html`, plus `rea.json` and `screenshot.png` when the REA backend runs). Install the backend once with `npm install -g rea-agents@6.10.1` (or point `security.rea.command` at a local copy). GRID will not download or execute npm code unless you explicitly set `security.rea.allow_npx` to `true`. If Node or Chrome is unavailable, the native fallback still produces a static report.
+Reports are written to `refs/rea/<host>-<timestamp>/` (`report.md`, `manifest.json`, `network.json`, `headers.json`, `page.html`, plus `rea.json` and `screenshot.png` when the REA backend runs). The REA backend scrolls through the page before capture (PageDown steps, then back to the top) so lazy-loaded bundles, animations and network calls are included; set `security.rea.scroll_steps` to change the depth or `0` to disable. Install the backend once with `npm install -g rea-agents@6.10.1` (or point `security.rea.command` at a local copy). GRID will not download or execute npm code unless you explicitly set `security.rea.allow_npx` to `true`. If Node or Chrome is unavailable, the native fallback still produces a static report.
 
 ### Context compression
 

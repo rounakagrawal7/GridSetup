@@ -40,6 +40,7 @@
       "command": "",
       "browser": "",
       "allow_npx": false,
+      "scroll_steps": 4,
       "timeout_seconds": 300
     }
   },

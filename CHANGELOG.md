@@ -14,12 +14,15 @@
   `security.rea.command`; setting `security.rea.allow_npx` to `true` permits a
   pinned `npx` download. A native BeautifulSoup/requests fallback runs when Node
   or a Chrome-family browser is missing.
+- The REA backend scrolls the page before capture (PageDown steps, then back
+  to the top) so lazy-loaded bundles and network calls are included.
+  `security.rea.scroll_steps` controls the depth (default 4, `0` disables).
 - Reports land in `refs/rea/<host>-<timestamp>/`: `report.md`, `manifest.json`,
   `network.json`, `headers.json`, `page.html`, plus `rea.json` and
   `screenshot.png` from the REA backend. Secrets are truncated in the report.
 - `rea` is classified dangerous, so it always asks. The registry grows to 81
-  tools; 23 new tests cover authorization, parsing, redaction, routing and the
-  local teardown path (135 tests total, 51 routing evals).
+  tools; 25 new tests cover authorization, parsing, redaction, routing and the
+  local teardown path (137 tests total, 51 routing evals).
 
 ## v3.1 - always alive
 

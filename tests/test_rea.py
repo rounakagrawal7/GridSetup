@@ -158,6 +158,24 @@ class ReaHelpersTests(unittest.TestCase):
         finally:
             grid_rea.shutil.which = old_which
 
+    def test_scenario_scrolls_then_returns_to_top(self):
+        scenario = grid_rea.build_scenario(
+            grid_rea.parse_target("https://example.com"), "chrome.exe", 2
+        )
+        actions = scenario["actions"]
+        keys = [action.get("key") for action in actions]
+        self.assertEqual(keys.count("PageDown"), 2)
+        self.assertIn("Home", keys)
+        self.assertEqual(keys.index("Home"), len(keys) - 2)
+        self.assertEqual(actions[1]["locator"], {"kind": "css", "selector": "body"})
+        self.assertEqual(scenario["capture"]["at_end"][0], "dom")
+
+    def test_scenario_can_disable_scrolling(self):
+        scenario = grid_rea.build_scenario(
+            grid_rea.parse_target("https://example.com"), "chrome.exe", 0
+        )
+        self.assertEqual([a.get("key") for a in scenario["actions"]], [None])
+
 
 class ReaAllowlistEditingTests(unittest.TestCase):
     def test_authorize_and_revoke_host(self):
