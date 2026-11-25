@@ -207,7 +207,10 @@ Landed:
 - Android-KMP library plugin (`com.android.kotlin.multiplatform.library`) and a
   debug APK build on compileSdk 36;
 - desktop model switcher, session token meter and per-reply duration/tokens;
-  tool-only runs render one output card.
+  tool-only runs render one output card; slash-command palette with
+  arrow-key selection, cursor-at-end completion, every app/tool command, and
+  local `/help`, `/new`, `/clear`, `/model`, `/tokens`, `/rea`, `/tools`,
+  `/tool` handling.
 
 Still open:
 

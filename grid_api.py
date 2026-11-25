@@ -295,6 +295,21 @@ class GridAPIServer:
                 pass
         return 200, {"ok": True, "model": model, "backend": getattr(backend, "type", "")}
 
+    def _tools_info(self) -> Dict[str, Any]:
+        tools = getattr(self.runtime, "Tools", None)
+        registry = getattr(tools, "registry", {}) if tools is not None else {}
+        enabled = getattr(tools, "enabled", set()) if tools is not None else set()
+        rows = [
+            {
+                "name": name,
+                "description": str(info.get("desc") or ""),
+                "enabled": name in enabled,
+            }
+            for name, info in registry.items()
+        ]
+        rows.sort(key=lambda row: row["name"])
+        return {"ok": True, "count": len(rows), "tools": rows}
+
     def _rea_reports(self) -> List[Dict[str, Any]]:
         rows = []
         if not self.refs_dir.exists():
@@ -619,6 +634,8 @@ class GridAPIServer:
                     server._json(self, 200, server._payload())
                 elif path == "/api/v1/model":
                     server._json(self, 200, server._model_info())
+                elif path == "/api/v1/tools":
+                    server._json(self, 200, server._tools_info())
                 elif path == "/api/v1/threads":
                     server._json(self, 200, {"ok": True, "threads": server.threads.summaries()})
                 elif path.startswith("/api/v1/threads/"):

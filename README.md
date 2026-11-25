@@ -405,7 +405,7 @@ cd clients
 .\gradlew.bat :desktopApp:run
 ```
 
-The desktop finds the token at `../run/api_token`, `run/api_token`, or `GRID_API_TOKEN`; pass `--url` or `--token-file` to override. It renders user/assistant messages, live tool cards, REA report artifacts, and approval requests. Tool-only runs show a single tool card (no duplicated assistant bubble); each assistant reply carries its duration and token count, the sidebar has a session token meter, and the chat has a visible scrollbar. The model is shown in the sidebar and can be switched from the **Change model** menu without restarting.
+The desktop finds the token at `../run/api_token`, `run/api_token`, or `GRID_API_TOKEN`; pass `--url` or `--token-file` to override. It renders user/assistant messages, live tool cards, REA report artifacts, and approval requests. Tool-only runs show a single tool card (no duplicated assistant bubble); each assistant reply carries its duration and token count, the sidebar has a session token meter, and the chat has a visible scrollbar. The model is shown in the sidebar and can be switched from the **Change model** menu without restarting. Type `/` in the composer for the command palette (`/help`, `/new`, `/clear`, `/model`, `/tokens`, `/rea`, `/tools`, `/tool`, terminal commands, and every registered GRID tool), with arrow-key selection and Tab completion; the cursor lands at the end of the completed command.
 
 Android:
 

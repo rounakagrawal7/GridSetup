@@ -92,6 +92,14 @@ class APITestCase(unittest.TestCase):
         self.assertEqual(payload["protocol"], "1.0")
         self.assertEqual(payload["model"], "fake-model")
 
+    def test_tools_endpoint_lists_registry(self):
+        payload = requests.get(f"{self.base}/tools", headers=self.headers).json()
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["count"], len(Tools.registry))
+        names = {row["name"] for row in payload["tools"]}
+        self.assertIn("rea", names)
+        self.assertIn("web_search", names)
+
     def test_model_info_and_switch(self):
         info = requests.get(f"{self.base}/model", headers=self.headers).json()
         self.assertEqual(info["model"], "fake-model")

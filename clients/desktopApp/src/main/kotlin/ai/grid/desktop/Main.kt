@@ -7,6 +7,7 @@ import ai.grid.shared.GridAgentClient
 import ai.grid.shared.GridEvent
 import androidx.compose.foundation.VerticalScrollbar
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -58,8 +59,10 @@ import androidx.compose.ui.input.key.isShiftPressed
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
+import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Window
@@ -95,6 +98,47 @@ private val Muted = Color(0xFF8A9B8F)
 private val Danger = Color(0xFFFF6B6B)
 private val Warning = Color(0xFFFFD166)
 
+private data class SlashCommand(
+    val name: String,
+    val description: String,
+    val template: String? = null,
+)
+
+private val SLASH_COMMANDS = listOf(
+    SlashCommand("/help", "Show available commands and tools"),
+    SlashCommand("/new", "Start a new thread"),
+    SlashCommand("/clear", "Clear the current conversation"),
+    SlashCommand("/model", "Show the active model and how to switch"),
+    SlashCommand("/tokens", "Show session token and timing stats"),
+    SlashCommand(
+        "/rea",
+        "Authorized passive teardown: /rea authorized <url>",
+        template = "/rea authorized ",
+    ),
+    SlashCommand("/tools", "List every GRID tool"),
+    SlashCommand("/tool", "Run a tool: /tool <name> <input>", template = "/tool "),
+    SlashCommand("/memory", "Terminal: memory commands"),
+    SlashCommand("/life", "Terminal: autopilot controls"),
+    SlashCommand("/plan", "Terminal: toggle planner mode"),
+    SlashCommand("/ref", "Terminal: read an offloaded output"),
+    SlashCommand("/jobs", "Terminal: manage dynamic skills"),
+    SlashCommand("/persona", "Terminal: set/view identity"),
+    SlashCommand("/social", "Terminal: Moltbook social platform"),
+    SlashCommand("/pb", "Terminal: PocketBase control"),
+    SlashCommand("/export", "Terminal: export chat (json/txt/html)"),
+    SlashCommand("/save", "Terminal: save conversation"),
+    SlashCommand("/comms", "Terminal: Telegram/email channels"),
+    SlashCommand("/ctf", "Terminal: local CTF sandbox"),
+    SlashCommand("/game", "Terminal: game worlds"),
+    SlashCommand("/gcal", "Terminal: Google Calendar"),
+    SlashCommand("/gsheet", "Terminal: Google Sheets + Excel"),
+)
+
+private val TERMINAL_ONLY_COMMANDS = setOf(
+    "/memory", "/life", "/plan", "/ref", "/jobs", "/persona", "/social",
+    "/pb", "/export", "/save", "/comms", "/ctf", "/game", "/gcal", "/gsheet",
+)
+
 private sealed interface Item {
     data class User(val text: String) : Item
     data class Assistant(
@@ -119,6 +163,7 @@ private sealed interface Item {
         val resolved: Boolean = false,
     ) : Item
     data class Error(val message: String) : Item
+    data class Note(val text: String) : Item
 }
 
 fun main(args: Array<String>) {
@@ -152,12 +197,13 @@ private fun App(baseUrl: String, token: String) {
     val items = remember { mutableStateListOf<Item>() }
     val listState = rememberLazyListState()
     val inputFocus = remember { FocusRequester() }
-    var input by remember { mutableStateOf("") }
+    var input by remember { mutableStateOf(TextFieldValue("")) }
     var busy by remember { mutableStateOf(false) }
     var status by remember { mutableStateOf("Ready") }
     var threadId by remember { mutableStateOf(GridAgentClient.newThreadId()) }
     var model by remember { mutableStateOf("") }
     var models by remember { mutableStateOf(emptyList<String>()) }
+    var tools by remember { mutableStateOf(emptyList<ToolInfo>()) }
     var totalTokens by remember { mutableStateOf(0) }
     var lastLatency by remember { mutableStateOf(0L) }
     var lastTokens by remember { mutableStateOf(0) }
@@ -186,6 +232,8 @@ private fun App(baseUrl: String, token: String) {
                 model = info.model
                 models = info.models
             }
+            val toolList = withContext(Dispatchers.IO) { fetchTools(baseUrl, token) }
+            if (toolList != null) tools = toolList
         }
     }
 
@@ -271,10 +319,10 @@ private fun App(baseUrl: String, token: String) {
         }
     }
 
-    fun send() {
-        val prompt = input.trim()
+    fun send(promptOverride: String? = null) {
+        val prompt = (promptOverride ?: input.text).trim()
         if (prompt.isEmpty() || busy) return
-        input = ""
+        if (promptOverride == null) input = TextFieldValue("")
         items.add(Item.User(prompt))
         busy = true
         status = "Sending"
@@ -291,6 +339,97 @@ private fun App(baseUrl: String, token: String) {
                 busy = false
             }
         }
+    }
+
+    fun handleSlashCommand(raw: String): Boolean {
+        val command = raw.trim()
+        if (!command.startsWith("/")) return false
+        val name = command.substringBefore(" ").lowercase()
+        val args = command.substringAfter(" ", "").trim()
+        val toolName = name.removePrefix("/")
+        when {
+            name == "/help" -> items.add(
+                Item.Note(
+                    "Slash commands:\n" +
+                        SLASH_COMMANDS.joinToString("\n") {
+                            "  ${it.name.padEnd(10)} = ${it.description}"
+                        } +
+                        "\n\nPlus ${tools.size} GRID tools (type /tools).\n" +
+                        "Type / to autocomplete; ↑↓ select, Tab complete."
+                )
+            )
+            name == "/new" -> {
+                threadId = GridAgentClient.newThreadId()
+                items.clear()
+                status = "Ready"
+            }
+            name == "/clear" -> {
+                items.clear()
+                status = "Ready"
+            }
+            name == "/model" -> items.add(
+                Item.Note(
+                    "Active model: ${model.ifBlank { "(unknown)" }}\n" +
+                        "Available: ${models.joinToString(", ").ifBlank { "(none detected)" }}\n" +
+                        "Use Change model in the sidebar to switch."
+                )
+            )
+            name == "/tokens" -> items.add(
+                Item.Note(
+                    "Session: $runCount runs · ${formatTokens(totalTokens)} tokens\n" +
+                        "Last: ${formatDuration(lastLatency)} · ${formatTokens(lastTokens)} tokens"
+                )
+            )
+            name == "/tools" -> scope.launch {
+                val list = withContext(Dispatchers.IO) { fetchTools(baseUrl, token) } ?: tools
+                if (list.isEmpty()) {
+                    items.add(Item.Error("Could not load the tool registry."))
+                } else {
+                    items.add(
+                        Item.Note(
+                            "GRID tools (${list.size}):\n" +
+                                list.joinToString("\n") {
+                                    "  ${it.name.padEnd(22)} = ${it.description}"
+                                }
+                        )
+                    )
+                }
+            }
+            name == "/tool" -> {
+                val parts = args.split(Regex("\\s+"), limit = 2)
+                if (parts.isEmpty() || parts[0].isBlank()) {
+                    items.add(Item.Note("Usage: /tool <name> <input>"))
+                } else {
+                    val rest = parts.getOrNull(1).orEmpty()
+                    send(("${parts[0]} $rest").trim())
+                }
+            }
+            name == "/rea" -> {
+                if (args.isBlank()) {
+                    items.add(Item.Note("Usage: /rea authorized <url>"))
+                } else {
+                    val target = if (args.startsWith("authorized ")) {
+                        args
+                    } else {
+                        "authorized $args"
+                    }
+                    send("rea $target")
+                }
+            }
+            tools.any { it.name == toolName } -> {
+                send(("$toolName $args").trim())
+            }
+            name in TERMINAL_ONLY_COMMANDS -> items.add(
+                Item.Note(
+                    "$name is available in the terminal client.\n" +
+                        "Desktop commands: /help /new /clear /model /tokens /rea /tools /tool."
+                )
+            )
+            else -> items.add(
+                Item.Note("Unknown command: $name\nType /help for available commands.")
+            )
+        }
+        return true
     }
 
     fun resolveApproval(index: Int, approval: Item.Approval, decision: String) {
@@ -340,8 +479,8 @@ private fun App(baseUrl: String, token: String) {
                 status = "Ready"
             },
             onQuickPrompt = {
-                input = it
-                send()
+                input = TextFieldValue("")
+                send(it)
             },
         )
         Column(Modifier.weight(1f).fillMaxHeight().padding(18.dp)) {
@@ -370,6 +509,7 @@ private fun App(baseUrl: String, token: String) {
                                 onDeny = { resolveApproval(index, item, "deny") },
                             )
                             is Item.Error -> ErrorCard(item.message)
+                            is Item.Note -> NoteCard(item.text)
                         }
                     }
                 }
@@ -384,7 +524,9 @@ private fun App(baseUrl: String, token: String) {
                 busy = busy,
                 enabled = token.isNotBlank(),
                 focusRequester = inputFocus,
+                tools = tools,
                 onInput = { input = it },
+                onCommand = { handleSlashCommand(it) },
                 onSend = { send() },
             )
         }
@@ -693,56 +835,236 @@ private fun ErrorCard(message: String) {
 }
 
 @Composable
+private fun NoteCard(message: String) {
+    Card(
+        colors = CardDefaults.cardColors(containerColor = Color(0xFF102016)),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        SelectionContainer {
+            Text(
+                message,
+                color = GridGreenDim,
+                modifier = Modifier.padding(13.dp),
+                fontSize = 12.sp,
+                fontFamily = FontFamily.Monospace,
+            )
+        }
+    }
+}
+
+@Composable
 private fun Composer(
-    input: String,
+    input: TextFieldValue,
     busy: Boolean,
     enabled: Boolean,
     focusRequester: FocusRequester,
-    onInput: (String) -> Unit,
+    tools: List<ToolInfo>,
+    onInput: (TextFieldValue) -> Unit,
+    onCommand: (String) -> Boolean,
     onSend: () -> Unit,
 ) {
-    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Bottom) {
-        OutlinedTextField(
-            value = input,
-            onValueChange = onInput,
-            modifier = Modifier.weight(1f).focusRequester(focusRequester).onPreviewKeyEvent { event ->
-                if (
-                    enabled && !busy &&
-                    event.type == KeyEventType.KeyDown &&
-                    event.key == Key.Enter &&
-                    !event.isShiftPressed
-                ) {
-                    onSend()
-                    true
-                } else {
-                    false
-                }
-            },
-            placeholder = { Text("Ask GRID, run a tool, or request a teardown…", color = Muted) },
-            maxLines = 4,
-            enabled = enabled,
-        )
-        Spacer(Modifier.width(10.dp))
-        Button(
-            onClick = onSend,
-            enabled = enabled && !busy && input.isNotBlank(),
-            colors = ButtonDefaults.buttonColors(containerColor = GridGreen, contentColor = Color.Black),
-            modifier = Modifier.height(56.dp),
-        ) {
-            if (busy) {
-                CircularProgressIndicator(
-                    modifier = Modifier.size(18.dp),
-                    color = Color.Black,
-                    strokeWidth = 2.dp,
+    val text = input.text
+    val allCommands = (
+        SLASH_COMMANDS +
+            tools.map {
+                SlashCommand(
+                    "/${it.name}",
+                    it.description,
+                    template = "/${it.name} ",
                 )
-            } else {
-                Text("Send")
+            }
+        ).distinctBy { it.name }
+    val query = text.removePrefix("/").substringBefore(" ").trim()
+    var dismissed by remember { mutableStateOf(false) }
+    var selected by remember { mutableStateOf(0) }
+    val filtered = allCommands.filter {
+        it.name.removePrefix("/").startsWith(query, ignoreCase = true)
+    }
+    val showSuggestions = text.startsWith("/") &&
+        !text.contains(" ") &&
+        !dismissed &&
+        filtered.isNotEmpty()
+
+    LaunchedEffect(query) {
+        selected = 0
+        dismissed = false
+    }
+
+    fun apply(command: SlashCommand) {
+        val next = command.template ?: "${command.name} "
+        onInput(TextFieldValue(next, TextRange(next.length)))
+        selected = 0
+        dismissed = false
+    }
+
+    Column(Modifier.fillMaxWidth()) {
+        if (showSuggestions) {
+            Surface(
+                color = PanelRaised,
+                shape = RoundedCornerShape(10.dp),
+                modifier = Modifier.fillMaxWidth().padding(bottom = 6.dp),
+            ) {
+                Column(Modifier.padding(6.dp)) {
+                    Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 3.dp)) {
+                        Text(
+                            "COMMANDS · ${allCommands.size} options",
+                            color = GridGreen,
+                            fontSize = 9.sp,
+                            letterSpacing = 1.2.sp,
+                        )
+                        Spacer(Modifier.weight(1f))
+                        Text("↑↓ select · Tab complete · Esc close", color = Muted, fontSize = 9.sp)
+                    }
+                    filtered.take(10).forEachIndexed { index, command ->
+                        Row(
+                            Modifier
+                                .fillMaxWidth()
+                                .background(
+                                    if (index == selected) Color(0xFF173B27) else Color.Transparent,
+                                    RoundedCornerShape(6.dp),
+                                )
+                                .clickable { apply(command) }
+                                .padding(horizontal = 8.dp, vertical = 7.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(
+                                command.name,
+                                color = GridGreen,
+                                fontSize = 12.sp,
+                                fontFamily = FontFamily.Monospace,
+                                modifier = Modifier.width(140.dp),
+                            )
+                            Text("= ${command.description}", color = Muted, fontSize = 11.sp)
+                        }
+                    }
+                }
+            }
+        }
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Bottom) {
+            OutlinedTextField(
+                value = input,
+                onValueChange = onInput,
+                modifier = Modifier.weight(1f).focusRequester(focusRequester).onPreviewKeyEvent { event ->
+                    if (!enabled || event.type != KeyEventType.KeyDown) {
+                        false
+                    } else if (showSuggestions) {
+                        when (event.key) {
+                            Key.DirectionDown -> {
+                                selected = (selected + 1) % filtered.size
+                                true
+                            }
+                            Key.DirectionUp -> {
+                                selected = (selected - 1 + filtered.size) % filtered.size
+                                true
+                            }
+                            Key.Tab -> {
+                                apply(filtered[selected])
+                                true
+                            }
+                            Key.Escape -> {
+                                dismissed = true
+                                true
+                            }
+                            Key.Enter -> {
+                                if (event.isShiftPressed) {
+                                    false
+                                } else {
+                                    val command = filtered[selected]
+                                    if (
+                                        text.trim().equals(command.name, ignoreCase = true) &&
+                                        command.template == null
+                                    ) {
+                                        onCommand(command.name)
+                                        onInput(TextFieldValue(""))
+                                    } else {
+                                        apply(command)
+                                    }
+                                    true
+                                }
+                            }
+                            else -> false
+                        }
+                    } else if (event.key == Key.Enter && !event.isShiftPressed) {
+                        val trimmed = text.trim()
+                        if (trimmed.startsWith("/")) {
+                            onCommand(trimmed)
+                            onInput(TextFieldValue(""))
+                        } else {
+                            onSend()
+                        }
+                        true
+                    } else {
+                        false
+                    }
+                },
+                placeholder = {
+                    Text("Ask GRID or type / for commands…", color = Muted)
+                },
+                maxLines = 4,
+                enabled = enabled,
+            )
+            Spacer(Modifier.width(10.dp))
+            Button(
+                onClick = {
+                    val trimmed = text.trim()
+                    if (trimmed.startsWith("/")) {
+                        onCommand(trimmed)
+                        onInput(TextFieldValue(""))
+                    } else {
+                        onSend()
+                    }
+                },
+                enabled = enabled && !busy && text.isNotBlank(),
+                colors = ButtonDefaults.buttonColors(containerColor = GridGreen, contentColor = Color.Black),
+                modifier = Modifier.height(56.dp),
+            ) {
+                if (busy) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(18.dp),
+                        color = Color.Black,
+                        strokeWidth = 2.dp,
+                    )
+                } else {
+                    Text("Send")
+                }
             }
         }
     }
 }
 
 private data class ModelInfo(val model: String, val models: List<String>)
+
+private data class ToolInfo(val name: String, val description: String)
+
+private fun fetchTools(baseUrl: String, token: String): List<ToolInfo>? {
+    return try {
+        val connection = URI.create("$baseUrl/api/v1/tools").toURL().openConnection() as HttpURLConnection
+        connection.requestMethod = "GET"
+        connection.setRequestProperty("Authorization", "Bearer $token")
+        connection.connectTimeout = 3000
+        connection.readTimeout = 5000
+        try {
+            if (connection.responseCode != 200) {
+                null
+            } else {
+                val root = Json
+                    .parseToJsonElement(connection.inputStream.bufferedReader().readText())
+                    .jsonObject
+                root["tools"]?.jsonArray
+                    ?.mapNotNull { element ->
+                        val item = element.jsonObject
+                        val name = item["name"]?.jsonPrimitive?.contentOrNull ?: return@mapNotNull null
+                        val description = item["description"]?.jsonPrimitive?.contentOrNull ?: ""
+                        ToolInfo(name, description)
+                    }
+            }
+        } finally {
+            connection.disconnect()
+        }
+    } catch (_: Exception) {
+        null
+    }
+}
 
 private fun fetchModelInfo(baseUrl: String, token: String): ModelInfo? {
     return try {
