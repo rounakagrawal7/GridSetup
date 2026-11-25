@@ -5,6 +5,7 @@ package ai.grid.desktop
 
 import ai.grid.shared.GridAgentClient
 import ai.grid.shared.GridEvent
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.VerticalScrollbar
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -53,9 +54,14 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.isShiftPressed
@@ -72,6 +78,8 @@ import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.application
 import androidx.compose.ui.window.rememberWindowState
 import java.awt.Desktop
+import java.awt.Toolkit
+import java.awt.datatransfer.StringSelection
 import java.io.File
 import java.net.HttpURLConnection
 import java.net.URI
@@ -876,7 +884,7 @@ private fun Sidebar(
 private fun Header(status: String, threadId: String) {
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
         Column(Modifier.weight(1f)) {
-            Text("Command center", color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.SemiBold)
+            Text("Command Center", color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.SemiBold)
             Text(threadId, color = Muted, fontSize = 11.sp, fontFamily = FontFamily.Monospace)
         }
         Text(status, color = GridGreenDim, fontSize = 12.sp)
@@ -893,7 +901,19 @@ private fun UserBubble(text: String) {
             shape = RoundedCornerShape(14.dp),
             modifier = Modifier.fillMaxWidth(0.78f),
         ) {
-            Text(text, color = Color.White, modifier = Modifier.padding(13.dp), fontSize = 14.sp)
+            Box(Modifier.padding(start = 13.dp, top = 10.dp, end = 10.dp, bottom = 13.dp)) {
+                Text(
+                    text,
+                    color = Color.White,
+                    modifier = Modifier.padding(end = 26.dp),
+                    fontSize = 14.sp,
+                )
+                CopyButton(
+                    text = text,
+                    modifier = Modifier.align(Alignment.TopEnd),
+                    tint = Color.White.copy(alpha = 0.6f),
+                )
+            }
         }
     }
 }
@@ -906,13 +926,17 @@ private fun AssistantBubble(item: Item.Assistant) {
         modifier = Modifier.fillMaxWidth(0.9f),
     ) {
         Column(Modifier.padding(14.dp)) {
-            SelectionContainer {
-                Text(
-                    item.text.ifBlank { "…" },
-                    color = Color.White,
-                    fontSize = 14.sp,
-                    lineHeight = 21.sp,
-                )
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
+                SelectionContainer(Modifier.weight(1f)) {
+                    Text(
+                        item.text.ifBlank { "…" },
+                        color = Color.White,
+                        fontSize = 14.sp,
+                        lineHeight = 21.sp,
+                    )
+                }
+                Spacer(Modifier.width(8.dp))
+                CopyButton(text = item.text)
             }
             if (item.durationMs > 0 || item.tokens > 0) {
                 Spacer(Modifier.height(6.dp))
@@ -925,6 +949,68 @@ private fun AssistantBubble(item: Item.Assistant) {
                 )
             }
         }
+    }
+}
+
+@Composable
+private fun CopyButton(
+    text: String,
+    modifier: Modifier = Modifier,
+    tint: Color = Muted,
+) {
+    var copied by remember { mutableStateOf(false) }
+    LaunchedEffect(copied) {
+        if (copied) {
+            delay(1_400)
+            copied = false
+        }
+    }
+    Row(
+        modifier = modifier
+            .clip(RoundedCornerShape(6.dp))
+            .clickable {
+                copyToClipboard(text)
+                copied = true
+            }
+            .padding(4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        if (copied) {
+            Box(Modifier.size(14.dp), contentAlignment = Alignment.Center) {
+                Text("✓", color = GridGreen, fontSize = 12.sp)
+            }
+        } else {
+            CopyIcon(tint)
+        }
+    }
+}
+
+@Composable
+private fun CopyIcon(tint: Color) {
+    Canvas(Modifier.size(14.dp)) {
+        val stroke = 1.4.dp.toPx()
+        val radius = CornerRadius(2.dp.toPx(), 2.dp.toPx())
+        drawRoundRect(
+            color = tint,
+            topLeft = Offset(size.width * 0.30f, size.height * 0.08f),
+            size = Size(size.width * 0.58f, size.height * 0.64f),
+            cornerRadius = radius,
+            style = Stroke(width = stroke),
+        )
+        drawRoundRect(
+            color = tint,
+            topLeft = Offset(size.width * 0.12f, size.height * 0.28f),
+            size = Size(size.width * 0.58f, size.height * 0.64f),
+            cornerRadius = radius,
+            style = Stroke(width = stroke),
+        )
+    }
+}
+
+private fun copyToClipboard(text: String) {
+    try {
+        Toolkit.getDefaultToolkit().systemClipboard.setContents(StringSelection(text), null)
+    } catch (_: Exception) {
     }
 }
 
@@ -946,6 +1032,8 @@ private fun ToolCard(item: Item.Tool) {
                         color = GridGreen,
                         strokeWidth = 2.dp,
                     )
+                } else {
+                    CopyButton(item.result)
                 }
             }
             if (item.args.isNotBlank()) {
@@ -1121,13 +1209,18 @@ private fun NoteCard(message: String) {
         colors = CardDefaults.cardColors(containerColor = Color(0xFF102016)),
         modifier = Modifier.fillMaxWidth(),
     ) {
-        SelectionContainer {
-            Text(
-                message,
-                color = GridGreenDim,
-                modifier = Modifier.padding(13.dp),
-                fontSize = 12.sp,
-                fontFamily = FontFamily.Monospace,
+        Box(Modifier.padding(start = 13.dp, top = 10.dp, end = 10.dp, bottom = 13.dp)) {
+            SelectionContainer(Modifier.padding(end = 26.dp)) {
+                Text(
+                    message,
+                    color = GridGreenDim,
+                    fontSize = 12.sp,
+                    fontFamily = FontFamily.Monospace,
+                )
+            }
+            CopyButton(
+                text = message,
+                modifier = Modifier.align(Alignment.TopEnd),
             )
         }
     }

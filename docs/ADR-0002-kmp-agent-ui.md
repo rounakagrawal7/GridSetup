@@ -219,6 +219,8 @@ Landed:
   tool-using runs; `/exit` saves host memory and closes the window.
 - `/shutdown` saves memory, stops the API host via `POST /api/v1/shutdown`,
   suppresses resident auto-restart and closes the desktop.
+- Copy buttons on user messages, assistant replies, notes and tool outputs use
+  the system clipboard and show a short checkmark confirmation.
 
 Still open:
 

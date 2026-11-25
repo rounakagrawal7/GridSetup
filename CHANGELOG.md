@@ -53,6 +53,9 @@
   before closing the desktop window.
 - `/shutdown` adds a confirmation dialog, then saves, stops the API host and
   suppresses resident auto-restart before closing the desktop.
+- Copy icons on every user message, assistant reply, server-command note and
+  tool output; clicking copies the full text and briefly shows a checkmark.
+  The header is now titled **Command Center**.
 - Forced `kotlinx-datetime` 0.6.2 on the desktop runtime because the AG-UI SDK
   still calls `Clock.System`, while Compose Material3 1.9 resolves 0.7.x.
 - Android companion: `androidApp` uses the Android-KMP library plugin in
