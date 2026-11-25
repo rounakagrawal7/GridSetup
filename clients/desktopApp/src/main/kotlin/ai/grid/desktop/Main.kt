@@ -1201,29 +1201,26 @@ private fun ProviderForm(
     }
     Spacer(Modifier.height(10.dp))
     Row(verticalAlignment = Alignment.CenterVertically) {
-        OutlinedTextField(
-            value = model,
-            onValueChange = onModel,
-            label = { Text("Model") },
-            singleLine = true,
-            modifier = Modifier.weight(1f),
-        )
-        Spacer(Modifier.width(8.dp))
-        OutlinedButton(onClick = onLoadModels, enabled = !busy) {
-            Text(if (busy) "…" else "Load", fontSize = 11.sp)
-        }
-    }
-    if (models.isNotEmpty()) {
-        Spacer(Modifier.height(6.dp))
-        Box {
-            OutlinedButton(
-                onClick = { modelMenu = true },
+        Box(Modifier.weight(1f)) {
+            OutlinedTextField(
+                value = model,
+                onValueChange = onModel,
+                label = { Text("Model") },
+                singleLine = true,
                 modifier = Modifier.fillMaxWidth(),
-            ) {
-                Text("Choose from ${models.size} models", fontSize = 11.sp)
-                Spacer(Modifier.weight(1f))
-                Text("▾", color = Muted, fontSize = 11.sp)
-            }
+                trailingIcon = {
+                    Text(
+                        "▾",
+                        color = Muted,
+                        fontSize = 12.sp,
+                        modifier = Modifier
+                            .clickable {
+                                if (models.isEmpty()) onLoadModels() else modelMenu = true
+                            }
+                            .padding(horizontal = 8.dp, vertical = 4.dp),
+                    )
+                },
+            )
             DropdownMenu(
                 expanded = modelMenu,
                 onDismissRequest = { modelMenu = false },
@@ -1239,6 +1236,19 @@ private fun ProviderForm(
                 }
             }
         }
+        Spacer(Modifier.width(8.dp))
+        OutlinedButton(onClick = onLoadModels, enabled = !busy) {
+            Text(if (busy) "…" else "Refresh", fontSize = 11.sp)
+        }
+    }
+    if (models.isNotEmpty()) {
+        Spacer(Modifier.height(4.dp))
+        Text(
+            "${models.size} models available",
+            color = Muted,
+            fontSize = 9.sp,
+            fontFamily = FontFamily.Monospace,
+        )
     }
 }
 
@@ -1268,6 +1278,7 @@ private fun ProviderDialog(
     var models by remember { mutableStateOf(emptyList<String>()) }
     var busy by remember { mutableStateOf(false) }
     var message by remember { mutableStateOf("") }
+    var reloadKey by remember { mutableStateOf(0) }
 
     fun selectProvider(id: String) {
         if (provider != id) model = ""
@@ -1278,6 +1289,7 @@ private fun ProviderDialog(
         apiKey = ""
         keySet = serverProviders.firstOrNull { it.id == id }?.keySet ?: false
         models = emptyList()
+        reloadKey += 1
     }
 
     fun loadModels() {
@@ -1328,6 +1340,10 @@ private fun ProviderDialog(
                 busy = false
             }
         }
+    }
+
+    LaunchedEffect(reloadKey) {
+        loadModels()
     }
 
     AlertDialog(

@@ -59,6 +59,7 @@
 - First-run desktop setup: choose Ollama, LM Studio, OpenRouter or OpenAI,
   load models, write `config.json` and start the local host from the desktop.
   The sidebar shows the active provider and opens a **Change provider** dialog;
+  its model field is a dropdown that auto-loads the provider's available models.
   `GET/POST /api/v1/provider` and `POST /api/v1/provider/models` back it.
 - Native OpenAI backend support alongside Ollama, LM Studio and OpenRouter.
 - Forced `kotlinx-datetime` 0.6.2 on the desktop runtime because the AG-UI SDK
