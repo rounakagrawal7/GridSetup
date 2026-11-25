@@ -275,6 +275,7 @@ private fun ChatScreen(baseUrl: String, token: String, onSettings: () -> Unit) {
                     risk = event.risk,
                 )
             )
+            is GridEvent.Stats -> Unit
             is GridEvent.Custom -> Unit
             is GridEvent.RunFinished -> status = "Ready"
             is GridEvent.Error -> {

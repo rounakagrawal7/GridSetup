@@ -291,10 +291,20 @@ class LLMBackend:
         self.type = backend_type
         self.model = model
         self.base_url = base_url.rstrip("/")
+        self.last_usage = {"input": 0, "output": 0}
         self.compress_context = bool(
             (load_config().get("life") or {}).get("compress_context", False)
         )
         self._init_client()
+
+    def reset_usage(self):
+        self.last_usage = {"input": 0, "output": 0}
+
+    def _add_usage(self, input_tokens: int = 0, output_tokens: int = 0):
+        if input_tokens:
+            self.last_usage["input"] += int(input_tokens)
+        if output_tokens:
+            self.last_usage["output"] += int(output_tokens)
 
     def _init_client(self):
         if self.type in ("lm_studio", "openrouter"):
@@ -333,10 +343,20 @@ class LLMBackend:
                 resp = self._client.chat.completions.create(
                     model=self.model, messages=messages, temperature=temperature,
                 )
+                usage = getattr(resp, "usage", None)
+                if usage is not None:
+                    self._add_usage(
+                        getattr(usage, "prompt_tokens", 0),
+                        getattr(usage, "completion_tokens", 0),
+                    )
                 return resp.choices[0].message.content or ""
             resp = self._client.chat(
                 model=self.model, messages=messages,
                 options={"temperature": temperature, "num_ctx": OLLAMA_NUM_CTX},
+            )
+            self._add_usage(
+                resp.get("prompt_eval_count", 0),
+                resp.get("eval_count", 0),
             )
             return resp["message"]["content"]
         except Exception as e:
@@ -357,6 +377,12 @@ class LLMBackend:
                     for chunk in stream:
                         if Tools.cancel_token is not None and Tools.cancel_token.is_set():
                             break
+                        usage = getattr(chunk, "usage", None)
+                        if usage is not None:
+                            self._add_usage(
+                                getattr(usage, "prompt_tokens", 0),
+                                getattr(usage, "completion_tokens", 0),
+                            )
                         delta = chunk.choices[0].delta.content or ""
                         if delta:
                             result_container["data"] += delta
@@ -366,12 +392,17 @@ class LLMBackend:
                         options={"temperature": temperature, "num_ctx": OLLAMA_NUM_CTX},
                         stream=True,
                     )
+                    prompt_tokens = 0
+                    output_tokens = 0
                     for part in stream:
                         if Tools.cancel_token is not None and Tools.cancel_token.is_set():
                             break
+                        prompt_tokens = part.get("prompt_eval_count", prompt_tokens) or prompt_tokens
+                        output_tokens = part.get("eval_count", output_tokens) or output_tokens
                         delta = part.get("message", {}).get("content", "")
                         if delta:
                             result_container["data"] += delta
+                    self._add_usage(prompt_tokens, output_tokens)
                 result_container["done"] = True
             except Exception as e:
                 result_container["error"] = str(e)

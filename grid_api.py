@@ -256,6 +256,45 @@ class GridAPIServer:
             "runtime": getattr(self.runtime, "__name__", ""),
         }
 
+    def _model_info(self) -> Dict[str, Any]:
+        backend = getattr(self.orchestrator, "backend", None)
+        model = getattr(backend, "model", "")
+        backend_type = getattr(backend, "type", "")
+        models: List[str] = []
+        try:
+            fetcher = getattr(backend, "fetch_models", None)
+            if callable(fetcher):
+                models = list(
+                    fetcher(backend_type, getattr(backend, "base_url", "")) or []
+                )
+        except Exception:
+            models = []
+        return {
+            "ok": True,
+            "model": model,
+            "backend": backend_type,
+            "models": models,
+        }
+
+    def _set_model(self, body: Dict[str, Any]) -> Tuple[int, Dict[str, Any]]:
+        model = str(body.get("model") or "").strip()
+        if not model:
+            return 400, {"ok": False, "error": "model is required"}
+        backend = getattr(self.orchestrator, "backend", None)
+        if backend is None:
+            return 503, {"ok": False, "error": "no backend is active"}
+        try:
+            backend.model = model
+        except Exception as exc:
+            return 500, {"ok": False, "error": f"could not switch model: {exc}"}
+        save = getattr(self.runtime, "save_config", None)
+        if callable(save):
+            try:
+                save({"model": model})
+            except Exception:
+                pass
+        return 200, {"ok": True, "model": model, "backend": getattr(backend, "type", "")}
+
     def _rea_reports(self) -> List[Dict[str, Any]]:
         rows = []
         if not self.refs_dir.exists():
@@ -400,6 +439,20 @@ class GridAPIServer:
             approval_callback=self._approval_callback(stream),
         )
         assistant_text = ""
+        tool_results: List[str] = []
+        started_at = time.time()
+        backend = getattr(self.orchestrator, "backend", None)
+        if hasattr(backend, "reset_usage"):
+            try:
+                backend.reset_usage()
+            except Exception:
+                pass
+
+        def sink(event: Dict[str, Any]) -> None:
+            if event.get("type") == "TOOL_CALL_RESULT":
+                tool_results.append(str(event.get("content") or ""))
+            stream.send(event)
+
         try:
             stream.send(
                 {
@@ -410,26 +463,60 @@ class GridAPIServer:
                 }
             )
             stream.send({"type": "STEP_STARTED", "stepName": step_name})
-            self.runtime.set_event_sink(stream.send)
+            self.runtime.set_event_sink(sink)
             self.runtime.set_policy_override(policy)
             assistant_text = self.orchestrator.process(prompt, stream=True) or ""
             if not isinstance(assistant_text, str):
                 assistant_text = str(assistant_text)
+            display_text = assistant_text
+            if tool_results:
+                cleaned = re.sub(
+                    r"^\[Tool:\s*[^\]]+\]\s*\n?", "", assistant_text
+                ).strip()
+                normalized = [result.strip() for result in tool_results if result.strip()]
+                if cleaned and any(cleaned == result for result in normalized):
+                    display_text = ""
+                elif assistant_text.strip() in normalized:
+                    display_text = ""
+            usage = getattr(backend, "last_usage", {}) or {}
+            input_tokens = int(usage.get("input", 0) or 0)
+            output_tokens = int(usage.get("output", 0) or 0)
+            estimated = False
+            if not input_tokens and not output_tokens:
+                input_tokens = max(1, len(prompt) // 4)
+                output_tokens = max(0, len(display_text) // 4)
+                estimated = True
             stream.send(
                 {
-                    "type": "TEXT_MESSAGE_START",
-                    "messageId": message_id,
-                    "role": "assistant",
+                    "type": "CUSTOM",
+                    "name": "grid.stats",
+                    "value": {
+                        "durationMs": int((time.time() - started_at) * 1000),
+                        "inputTokens": input_tokens,
+                        "outputTokens": output_tokens,
+                        "totalTokens": input_tokens + output_tokens,
+                        "model": getattr(backend, "model", ""),
+                        "toolCalls": len(tool_results),
+                        "estimated": estimated,
+                    },
                 }
             )
-            stream.send(
-                {
-                    "type": "TEXT_MESSAGE_CONTENT",
-                    "messageId": message_id,
-                    "delta": assistant_text,
-                }
-            )
-            stream.send({"type": "TEXT_MESSAGE_END", "messageId": message_id})
+            if display_text:
+                stream.send(
+                    {
+                        "type": "TEXT_MESSAGE_START",
+                        "messageId": message_id,
+                        "role": "assistant",
+                    }
+                )
+                stream.send(
+                    {
+                        "type": "TEXT_MESSAGE_CONTENT",
+                        "messageId": message_id,
+                        "delta": display_text,
+                    }
+                )
+                stream.send({"type": "TEXT_MESSAGE_END", "messageId": message_id})
             stream.send({"type": "STEP_FINISHED", "stepName": step_name})
             stream.send(
                 {
@@ -449,7 +536,7 @@ class GridAPIServer:
                 if isinstance(message, dict) and message.get("role") in {"user", "assistant"}
             ]
             stored.append(
-                {"id": message_id, "role": "assistant", "content": assistant_text}
+                {"id": message_id, "role": "assistant", "content": display_text}
             )
             self.threads.put(thread_id, stored)
         except Exception as exc:
@@ -530,6 +617,8 @@ class GridAPIServer:
                 path = urlparse(self.path).path.rstrip("/")
                 if path == "/api/v1/health":
                     server._json(self, 200, server._payload())
+                elif path == "/api/v1/model":
+                    server._json(self, 200, server._model_info())
                 elif path == "/api/v1/threads":
                     server._json(self, 200, {"ok": True, "threads": server.threads.summaries()})
                 elif path.startswith("/api/v1/threads/"):
@@ -584,6 +673,10 @@ class GridAPIServer:
                         server._json(self, 400, {"ok": False, "error": "invalid JSON body"})
                         return
                     server._handle_run(body, self)
+                    return
+                if path == "/api/v1/model":
+                    code, payload = server._set_model(self._read_json())
+                    server._json(self, code, payload)
                     return
                 if path.startswith("/api/v1/approvals/"):
                     approval_id = unquote(path[len("/api/v1/approvals/"):])

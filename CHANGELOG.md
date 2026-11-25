@@ -26,11 +26,17 @@
 - New `--api` host: a loopback AG-UI 1.0 endpoint over HTTP+SSE with bearer
   auth, thread storage, live tool/activity events, approval requests and REA
   report endpoints. The API resolves the live `__main__` tools so events and
-  request-scoped policies work in the real process (149 tests total).
+  request-scoped policies work in the real process (151 tests total).
 - First Kotlin Multiplatform client under `clients/`: a shared `GridAgentClient`
   over the AG-UI Kotlin SDK, a Compose Desktop shell with a live tool timeline,
   approval cards and REA artifact cards, and a JVM contract test that replays
   the Python SSE frames.
+- Desktop UX pass: tool-only runs show one output card instead of a duplicate
+  assistant bubble; assistant replies show elapsed time and token usage; the
+  sidebar has a session token meter; the chat has a visible scrollbar; the
+  active model is shown and can be switched from the UI.
+- API additions: `GET/POST /api/v1/model` and a `CUSTOM grid.stats` event with
+  duration, token counts, model and tool-call count.
 - Forced `kotlinx-datetime` 0.6.2 on the desktop runtime because the AG-UI SDK
   still calls `Clock.System`, while Compose Material3 1.9 resolves 0.7.x.
 - Android companion: `androidApp` uses the Android-KMP library plugin in

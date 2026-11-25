@@ -3,6 +3,7 @@ import tempfile
 import threading
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import requests
 
@@ -14,12 +15,16 @@ from grid_agent import Tools
 class FakeBackend:
     type = "ollama"
     model = "fake-model"
+    base_url = "http://fake-ollama"
+
+    @staticmethod
+    def fetch_models(backend_type, base_url):
+        return ["fake-model", "other-model"]
 
 
 class FakeOrchestrator:
-    backend = FakeBackend()
-
     def __init__(self):
+        self.backend = FakeBackend()
         self.prompts = []
 
     def process(self, prompt, stream=True):
@@ -87,6 +92,21 @@ class APITestCase(unittest.TestCase):
         self.assertEqual(payload["protocol"], "1.0")
         self.assertEqual(payload["model"], "fake-model")
 
+    def test_model_info_and_switch(self):
+        info = requests.get(f"{self.base}/model", headers=self.headers).json()
+        self.assertEqual(info["model"], "fake-model")
+        self.assertIn("other-model", info["models"])
+        with mock.patch.object(grid_agent, "save_config") as save:
+            response = requests.post(
+                f"{self.base}/model",
+                json={"model": "other-model"},
+                headers=self.headers,
+                timeout=5,
+            )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(self.orch.backend.model, "other-model")
+        save.assert_called_once_with({"model": "other-model"})
+
     def test_run_stream_follows_agui_shape(self):
         events = self._events(
             {
@@ -115,6 +135,10 @@ class APITestCase(unittest.TestCase):
         self.assertEqual(content, "echo: hello")
         for event in events:
             self.assertIn("timestamp", event)
+        stats = next(event for event in events if event.get("name") == "grid.stats")
+        self.assertGreater(stats["value"]["totalTokens"], 0)
+        self.assertGreaterEqual(stats["value"]["durationMs"], 0)
+        self.assertEqual(stats["value"]["model"], "fake-model")
         self.assertEqual(self.orch.prompts, ["hello"])
 
     def test_threads_are_persisted(self):
@@ -131,6 +155,39 @@ class APITestCase(unittest.TestCase):
         ).json()
         self.assertEqual(detail["thread"]["messages"][-1]["role"], "assistant")
         self.assertIn("remember this", detail["thread"]["messages"][-1]["content"])
+
+    def test_tool_result_is_not_duplicated_as_text(self):
+        saved_registry = dict(Tools.registry)
+        saved_enabled = set(Tools.enabled)
+        Tools.registry["fake_echo"] = {
+            "fn": lambda text: "tool-output",
+            "desc": "test tool",
+            "input_desc": "input",
+        }
+        Tools.enabled.add("fake_echo")
+        original = self.orch.process
+
+        def process(prompt, stream=True):
+            result = Tools.execute("fake_echo", "x")
+            return f"[Tool: fake_echo]\n{result}"
+
+        self.orch.process = process
+        try:
+            events = self._events(
+                {
+                    "threadId": "thr_tool",
+                    "messages": [{"id": "m1", "role": "user", "content": "run fake"}],
+                }
+            )
+        finally:
+            self.orch.process = original
+            Tools.registry.clear()
+            Tools.registry.update(saved_registry)
+            Tools.enabled.clear()
+            Tools.enabled.update(saved_enabled)
+        types = [event["type"] for event in events]
+        self.assertIn("TOOL_CALL_RESULT", types)
+        self.assertNotIn("TEXT_MESSAGE_CONTENT", types)
 
     def test_rejects_missing_user_message(self):
         response = requests.post(

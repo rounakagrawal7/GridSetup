@@ -369,6 +369,8 @@ Endpoints:
 | Method | Path | Purpose |
 |---|---|---|
 | `GET` | `/api/v1/health` | protocol, model, thread/report counts |
+| `GET` | `/api/v1/model` | active model and available models |
+| `POST` | `/api/v1/model` | switch the active model |
 | `GET` | `/api/v1/threads` | thread summaries |
 | `GET` | `/api/v1/threads/<id>` | stored messages |
 | `POST` | `/api/v1/agent` | `RunAgentInput`; returns an SSE stream |
@@ -403,7 +405,7 @@ cd clients
 .\gradlew.bat :desktopApp:run
 ```
 
-The desktop finds the token at `../run/api_token`, `run/api_token`, or `GRID_API_TOKEN`; pass `--url` or `--token-file` to override. It renders user/assistant messages, live tool cards, REA report artifacts, and approval requests.
+The desktop finds the token at `../run/api_token`, `run/api_token`, or `GRID_API_TOKEN`; pass `--url` or `--token-file` to override. It renders user/assistant messages, live tool cards, REA report artifacts, and approval requests. Tool-only runs show a single tool card (no duplicated assistant bubble); each assistant reply carries its duration and token count, the sidebar has a session token meter, and the chat has a visible scrollbar. The model is shown in the sidebar and can be switched from the **Change model** menu without restarting.
 
 Android:
 

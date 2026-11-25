@@ -205,7 +205,9 @@ Landed:
 - Android companion with encrypted Keystore token storage, host setup screen,
   chat, tool cards, REA artifact paths and approvals;
 - Android-KMP library plugin (`com.android.kotlin.multiplatform.library`) and a
-  debug APK build on compileSdk 36.
+  debug APK build on compileSdk 36;
+- desktop model switcher, session token meter and per-reply duration/tokens;
+  tool-only runs render one output card.
 
 Still open:
 

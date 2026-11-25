@@ -22,8 +22,11 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.longOrNull
 import kotlin.random.Random
 
 /**
@@ -39,6 +42,8 @@ class GridAgentClient(
     private val endpoint = baseUrl.trimEnd('/') + "/api/v1/agent"
     private val agent = AgUiAgent(endpoint) {
         bearerToken = token
+        requestTimeout = 600_000L
+        connectTimeout = 10_000L
     }
 
     fun run(
@@ -67,6 +72,15 @@ class GridAgentClient(
 private fun JsonElement.string(key: String): String =
     (this as? JsonObject)?.get(key)?.jsonPrimitive?.contentOrNull ?: ""
 
+private fun JsonElement.int(key: String): Int =
+    (this as? JsonObject)?.get(key)?.jsonPrimitive?.intOrNull ?: 0
+
+private fun JsonElement.long(key: String): Long =
+    (this as? JsonObject)?.get(key)?.jsonPrimitive?.longOrNull ?: 0L
+
+private fun JsonElement.boolean(key: String): Boolean =
+    (this as? JsonObject)?.get(key)?.jsonPrimitive?.booleanOrNull ?: false
+
 private fun BaseEvent.toGridEvent(): GridEvent = when (this) {
     is RunStartedEvent -> GridEvent.RunStarted(threadId, runId)
     is StepStartedEvent -> GridEvent.StepStarted(stepName)
@@ -93,6 +107,15 @@ private fun BaseEvent.toGridEvent(): GridEvent = when (this) {
             tool = value.string("tool"),
             input = value.string("input"),
             risk = value.string("risk"),
+        )
+        "grid.stats" -> GridEvent.Stats(
+            durationMs = value.long("durationMs"),
+            inputTokens = value.int("inputTokens"),
+            outputTokens = value.int("outputTokens"),
+            totalTokens = value.int("totalTokens"),
+            model = value.string("model"),
+            toolCalls = value.int("toolCalls"),
+            estimated = value.boolean("estimated"),
         )
         else -> GridEvent.Custom(name, value.toString())
     }

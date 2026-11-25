@@ -29,6 +29,15 @@ sealed interface GridEvent {
         val input: String,
         val risk: String,
     ) : GridEvent
+    data class Stats(
+        val durationMs: Long,
+        val inputTokens: Int,
+        val outputTokens: Int,
+        val totalTokens: Int,
+        val model: String,
+        val toolCalls: Int,
+        val estimated: Boolean,
+    ) : GridEvent
     data class Custom(val name: String, val value: String) : GridEvent
     data class RunFinished(val threadId: String, val runId: String) : GridEvent
     data class Error(val message: String) : GridEvent

@@ -23,6 +23,7 @@ dependencies {
     implementation(compose.desktop.currentOs)
     implementation(compose.material3)
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-swing:1.11.0")
+    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.13.0")
 }
 
 // AG-UI 0.4.1 is built against kotlinx-datetime 0.6.x. Compose Material3

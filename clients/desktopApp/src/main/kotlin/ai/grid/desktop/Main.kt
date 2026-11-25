@@ -5,6 +5,7 @@ package ai.grid.desktop
 
 import ai.grid.shared.GridAgentClient
 import ai.grid.shared.GridEvent
+import androidx.compose.foundation.VerticalScrollbar
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -21,6 +22,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollbarAdapter
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.Button
@@ -28,6 +30,8 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -63,6 +67,7 @@ import androidx.compose.ui.window.application
 import androidx.compose.ui.window.rememberWindowState
 import java.awt.Desktop
 import java.io.File
+import java.net.HttpURLConnection
 import java.net.URI
 import java.net.http.HttpClient
 import java.net.http.HttpRequest
@@ -74,6 +79,11 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import kotlin.time.Duration.Companion.milliseconds
 
 private val Background = Color(0xFF0B0F0C)
@@ -87,7 +97,13 @@ private val Warning = Color(0xFFFFD166)
 
 private sealed interface Item {
     data class User(val text: String) : Item
-    data class Assistant(val id: String, val text: String) : Item
+    data class Assistant(
+        val id: String,
+        val text: String,
+        val durationMs: Long = 0,
+        val tokens: Int = 0,
+        val estimated: Boolean = false,
+    ) : Item
     data class Tool(
         val callId: String,
         val name: String,
@@ -140,6 +156,12 @@ private fun App(baseUrl: String, token: String) {
     var busy by remember { mutableStateOf(false) }
     var status by remember { mutableStateOf("Ready") }
     var threadId by remember { mutableStateOf(GridAgentClient.newThreadId()) }
+    var model by remember { mutableStateOf("") }
+    var models by remember { mutableStateOf(emptyList<String>()) }
+    var totalTokens by remember { mutableStateOf(0) }
+    var lastLatency by remember { mutableStateOf(0L) }
+    var lastTokens by remember { mutableStateOf(0) }
+    var runCount by remember { mutableStateOf(0) }
     val client = remember { GridAgentClient(baseUrl, token) }
 
     LaunchedEffect(baseUrl, token) {
@@ -157,6 +179,12 @@ private fun App(baseUrl: String, token: String) {
                             "Start it with: python grid_agent.py --api --no-input"
                     )
                 )
+            }
+        } else {
+            val info = withContext(Dispatchers.IO) { fetchModelInfo(baseUrl, token) }
+            if (info != null) {
+                model = info.model
+                models = info.models
             }
         }
     }
@@ -214,6 +242,21 @@ private fun App(baseUrl: String, token: String) {
                     risk = event.risk,
                 )
             )
+            is GridEvent.Stats -> {
+                totalTokens += event.totalTokens
+                lastLatency = event.durationMs
+                lastTokens = event.totalTokens
+                runCount += 1
+                val index = items.indexOfLast { it is Item.Assistant }
+                if (index >= 0) {
+                    val old = items[index] as Item.Assistant
+                    items[index] = old.copy(
+                        durationMs = event.durationMs,
+                        tokens = event.totalTokens,
+                        estimated = event.estimated,
+                    )
+                }
+            }
             is GridEvent.Custom -> Unit
             is GridEvent.RunFinished -> {
                 busy = false
@@ -264,12 +307,33 @@ private fun App(baseUrl: String, token: String) {
         }
     }
 
+    fun changeModel(requested: String) {
+        scope.launch {
+            val ok = withContext(Dispatchers.IO) {
+                postModel(baseUrl, token, requested)
+            }
+            if (ok) {
+                model = requested
+                status = "Model: $requested"
+            } else {
+                items.add(Item.Error("Could not switch model. Check that GRID --api is running."))
+            }
+        }
+    }
+
     Row(Modifier.fillMaxSize().background(Background)) {
         Sidebar(
             status = status,
             threadId = threadId,
             baseUrl = baseUrl,
             tokenReady = token.isNotBlank(),
+            model = model,
+            models = models,
+            totalTokens = totalTokens,
+            lastLatency = lastLatency,
+            lastTokens = lastTokens,
+            runCount = runCount,
+            onModelChange = { changeModel(it) },
             onNewThread = {
                 threadId = GridAgentClient.newThreadId()
                 items.clear()
@@ -288,25 +352,31 @@ private fun App(baseUrl: String, token: String) {
                     listState.animateScrollToItem(items.lastIndex)
                 }
             }
-            LazyColumn(
-                state = listState,
-                modifier = Modifier.weight(1f).fillMaxWidth(),
-                verticalArrangement = Arrangement.spacedBy(10.dp),
-            ) {
-                itemsIndexed(items) { index, item ->
-                    when (item) {
-                        is Item.User -> UserBubble(item.text)
-                        is Item.Assistant -> AssistantBubble(item.text)
-                        is Item.Tool -> ToolCard(item)
-                        is Item.Artifact -> ArtifactCard(item.path)
-                        is Item.Approval -> ApprovalCard(
-                            approval = item,
-                            onApprove = { resolveApproval(index, item, "approve") },
-                            onDeny = { resolveApproval(index, item, "deny") },
-                        )
-                        is Item.Error -> ErrorCard(item.message)
+            Box(Modifier.weight(1f).fillMaxWidth()) {
+                LazyColumn(
+                    state = listState,
+                    modifier = Modifier.fillMaxSize().padding(end = 12.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    itemsIndexed(items) { index, item ->
+                        when (item) {
+                            is Item.User -> UserBubble(item.text)
+                            is Item.Assistant -> AssistantBubble(item)
+                            is Item.Tool -> ToolCard(item)
+                            is Item.Artifact -> ArtifactCard(item.path)
+                            is Item.Approval -> ApprovalCard(
+                                approval = item,
+                                onApprove = { resolveApproval(index, item, "approve") },
+                                onDeny = { resolveApproval(index, item, "deny") },
+                            )
+                            is Item.Error -> ErrorCard(item.message)
+                        }
                     }
                 }
+                VerticalScrollbar(
+                    adapter = rememberScrollbarAdapter(listState),
+                    modifier = Modifier.align(Alignment.CenterEnd).fillMaxHeight(),
+                )
             }
             Spacer(Modifier.height(12.dp))
             Composer(
@@ -327,9 +397,17 @@ private fun Sidebar(
     threadId: String,
     baseUrl: String,
     tokenReady: Boolean,
+    model: String,
+    models: List<String>,
+    totalTokens: Int,
+    lastLatency: Long,
+    lastTokens: Int,
+    runCount: Int,
+    onModelChange: (String) -> Unit,
     onNewThread: () -> Unit,
     onQuickPrompt: (String) -> Unit,
 ) {
+    var modelMenu by remember { mutableStateOf(false) }
     Column(
         Modifier
             .width(250.dp)
@@ -357,13 +435,62 @@ private fun Sidebar(
         Spacer(Modifier.height(14.dp))
         Text("ENDPOINT", color = Muted, fontSize = 10.sp, letterSpacing = 1.5.sp)
         Text(baseUrl, color = GridGreenDim, fontSize = 11.sp, fontFamily = FontFamily.Monospace)
-        Spacer(Modifier.height(18.dp))
+        Spacer(Modifier.height(12.dp))
+        Text("MODEL", color = Muted, fontSize = 10.sp, letterSpacing = 1.5.sp)
+        Text(
+            model.ifBlank { "(unknown)" },
+            color = GridGreenDim,
+            fontSize = 11.sp,
+            fontFamily = FontFamily.Monospace,
+            maxLines = 1,
+        )
+        Box {
+            OutlinedButton(
+                onClick = { modelMenu = true },
+                modifier = Modifier.fillMaxWidth(),
+            ) { Text("Change model", fontSize = 11.sp) }
+            DropdownMenu(
+                expanded = modelMenu,
+                onDismissRequest = { modelMenu = false },
+            ) {
+                if (models.isEmpty()) {
+                    DropdownMenuItem(
+                        text = { Text("No models found", fontSize = 12.sp) },
+                        onClick = { modelMenu = false },
+                    )
+                }
+                models.forEach { candidate ->
+                    DropdownMenuItem(
+                        text = { Text(candidate, fontSize = 12.sp) },
+                        onClick = {
+                            modelMenu = false
+                            onModelChange(candidate)
+                        },
+                    )
+                }
+            }
+        }
+        Spacer(Modifier.height(12.dp))
+        Text("TOKEN METER", color = Muted, fontSize = 10.sp, letterSpacing = 1.5.sp)
+        Text(
+            "${formatTokens(totalTokens)} total · $runCount runs",
+            color = GridGreenDim,
+            fontSize = 11.sp,
+            fontFamily = FontFamily.Monospace,
+        )
+        Text(
+            "last ${formatDuration(lastLatency)} · ${formatTokens(lastTokens)} tok",
+            color = Muted,
+            fontSize = 10.sp,
+            fontFamily = FontFamily.Monospace,
+        )
+        Spacer(Modifier.height(14.dp))
         Button(
             onClick = onNewThread,
             colors = ButtonDefaults.buttonColors(containerColor = PanelRaised, contentColor = GridGreen),
             modifier = Modifier.fillMaxWidth(),
         ) { Text("New thread") }
-        Spacer(Modifier.height(22.dp))
+        Spacer(Modifier.height(18.dp))
         Text("QUICK START", color = Muted, fontSize = 10.sp, letterSpacing = 1.5.sp)
         Spacer(Modifier.height(8.dp))
         listOf(
@@ -418,20 +545,31 @@ private fun UserBubble(text: String) {
 }
 
 @Composable
-private fun AssistantBubble(text: String) {
+private fun AssistantBubble(item: Item.Assistant) {
     Surface(
         color = PanelRaised,
         shape = RoundedCornerShape(14.dp),
         modifier = Modifier.fillMaxWidth(0.9f),
     ) {
-        SelectionContainer {
-            Text(
-                text.ifBlank { "…" },
-                color = Color.White,
-                modifier = Modifier.padding(14.dp),
-                fontSize = 14.sp,
-                lineHeight = 21.sp,
-            )
+        Column(Modifier.padding(14.dp)) {
+            SelectionContainer {
+                Text(
+                    item.text.ifBlank { "…" },
+                    color = Color.White,
+                    fontSize = 14.sp,
+                    lineHeight = 21.sp,
+                )
+            }
+            if (item.durationMs > 0 || item.tokens > 0) {
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    "${formatDuration(item.durationMs)} · " +
+                        "${formatTokens(item.tokens)}${if (item.estimated) " est." else ""} tokens",
+                    color = Muted,
+                    fontSize = 10.sp,
+                    fontFamily = FontFamily.Monospace,
+                )
+            }
         }
     }
 }
@@ -603,6 +741,65 @@ private fun Composer(
         }
     }
 }
+
+private data class ModelInfo(val model: String, val models: List<String>)
+
+private fun fetchModelInfo(baseUrl: String, token: String): ModelInfo? {
+    return try {
+        val connection = URI.create("$baseUrl/api/v1/model").toURL().openConnection() as HttpURLConnection
+        connection.requestMethod = "GET"
+        connection.setRequestProperty("Authorization", "Bearer $token")
+        connection.connectTimeout = 3000
+        connection.readTimeout = 5000
+        try {
+            if (connection.responseCode != 200) {
+                null
+            } else {
+                val root = Json
+                    .parseToJsonElement(connection.inputStream.bufferedReader().readText())
+                    .jsonObject
+                val current = root["model"]?.jsonPrimitive?.contentOrNull ?: ""
+                val available = root["models"]?.jsonArray
+                    ?.mapNotNull { it.jsonPrimitive.contentOrNull }
+                    ?: emptyList()
+                ModelInfo(current, available)
+            }
+        } finally {
+            connection.disconnect()
+        }
+    } catch (_: Exception) {
+        null
+    }
+}
+
+private fun postModel(baseUrl: String, token: String, model: String): Boolean {
+    return try {
+        val connection = URI.create("$baseUrl/api/v1/model").toURL().openConnection() as HttpURLConnection
+        connection.requestMethod = "POST"
+        connection.doOutput = true
+        connection.setRequestProperty("Authorization", "Bearer $token")
+        connection.setRequestProperty("Content-Type", "application/json")
+        connection.connectTimeout = 3000
+        connection.readTimeout = 5000
+        try {
+            val escaped = model.replace("\\", "\\\\").replace("\"", "\\\"")
+            connection.outputStream.use {
+                it.write("{\"model\":\"$escaped\"}".toByteArray())
+            }
+            connection.responseCode in 200..299
+        } finally {
+            connection.disconnect()
+        }
+    } catch (_: Exception) {
+        false
+    }
+}
+
+private fun formatDuration(ms: Long): String =
+    if (ms <= 0) "0.0s" else "%.1fs".format(ms / 1000.0)
+
+private fun formatTokens(tokens: Int): String =
+    if (tokens >= 1000) "%.1fk".format(tokens / 1000.0) else tokens.toString()
 
 private fun apiHealthy(baseUrl: String, token: String): Boolean {
     return try {
