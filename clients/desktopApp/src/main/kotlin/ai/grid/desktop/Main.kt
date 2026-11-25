@@ -107,10 +107,26 @@ private data class SlashCommand(
     val template: String? = null,
 )
 
+private enum class ToolKind { Command, Edit, Read, Tool }
+
+private fun toolKind(name: String): ToolKind {
+    return when (name.lowercase()) {
+        "run_command", "run_code" -> ToolKind.Command
+        "write_file", "delete_file", "create_directory", "save_skill", "delete_skill" ->
+            ToolKind.Edit
+        "read_file", "document_read", "file_search", "list_directory", "get_cwd",
+        "ref_read", "skill_read", "skill_search", "list_skills",
+        "memory_recall", "memory_status", "db_query", "db_analytics" ->
+            ToolKind.Read
+        else -> ToolKind.Tool
+    }
+}
+
 private val SLASH_COMMANDS = listOf(
     SlashCommand("/help", "Show available commands and tools"),
     SlashCommand("/new", "Start a new thread"),
     SlashCommand("/clear", "Clear the current conversation"),
+    SlashCommand("/exit", "Save memory and close GRID"),
     SlashCommand("/model", "Show the active model and how to switch"),
     SlashCommand("/tokens", "Show session token and timing stats"),
     SlashCommand(
@@ -158,6 +174,16 @@ private sealed interface Item {
         val result: String?,
     ) : Item
     data class Artifact(val path: String) : Item
+    data class Activity(
+        val commands: Int = 0,
+        val edits: Int = 0,
+        val reads: Int = 0,
+        val thoughts: Int = 0,
+        val tools: Int = 0,
+        val running: Boolean = true,
+    ) : Item {
+        val total: Int get() = commands + edits + reads + tools
+    }
     data class Approval(
         val id: String,
         val tool: String,
@@ -188,14 +214,14 @@ fun main(args: Array<String>) {
                     onSurface = Color.White,
                 )
             ) {
-                App(baseUrl.trimEnd('/'), token)
+                App(baseUrl.trimEnd('/'), token, onExit = ::exitApplication)
             }
         }
     }
 }
 
 @Composable
-private fun App(baseUrl: String, token: String) {
+private fun App(baseUrl: String, token: String, onExit: () -> Unit) {
     val scope = rememberCoroutineScope()
     val items = remember { mutableStateListOf<Item>() }
     val listState = rememberLazyListState()
@@ -245,6 +271,54 @@ private fun App(baseUrl: String, token: String) {
         inputFocus.requestFocus()
     }
 
+    fun activityIndex(): Int = items.indexOfLast { it is Item.Activity }
+
+    fun addDuringRun(item: Item) {
+        val index = activityIndex()
+        if (index >= 0) items.add(index, item) else items.add(item)
+    }
+
+    fun updateActivity(transform: (Item.Activity) -> Item.Activity) {
+        val index = activityIndex()
+        if (index >= 0) {
+            items[index] = transform(items[index] as Item.Activity)
+        }
+    }
+
+    fun recordTool(name: String) {
+        updateActivity { activity ->
+            when (toolKind(name)) {
+                ToolKind.Command -> activity.copy(
+                    commands = activity.commands + 1,
+                    thoughts = activity.thoughts + 1,
+                )
+                ToolKind.Edit -> activity.copy(
+                    edits = activity.edits + 1,
+                    thoughts = activity.thoughts + 1,
+                )
+                ToolKind.Read -> activity.copy(
+                    reads = activity.reads + 1,
+                    thoughts = activity.thoughts + 1,
+                )
+                ToolKind.Tool -> activity.copy(
+                    tools = activity.tools + 1,
+                    thoughts = activity.thoughts + 1,
+                )
+            }
+        }
+    }
+
+    fun finishActivity() {
+        val index = activityIndex()
+        if (index < 0) return
+        val activity = items[index] as Item.Activity
+        if (activity.total == 0) {
+            items.removeAt(index)
+        } else if (activity.running) {
+            items[index] = activity.copy(running = false)
+        }
+    }
+
     fun handle(event: GridEvent) {
         when (event) {
             is GridEvent.RunStarted -> {
@@ -268,7 +342,10 @@ private fun App(baseUrl: String, token: String) {
                 }
             }
             is GridEvent.MessageFinished -> Unit
-            is GridEvent.ToolStarted -> items.add(Item.Tool(event.callId, event.name, "", null))
+            is GridEvent.ToolStarted -> {
+                addDuringRun(Item.Tool(event.callId, event.name, "", null))
+                recordTool(event.name)
+            }
             is GridEvent.ToolArgs -> {
                 val index = items.indexOfLast { it is Item.Tool && it.callId == event.callId }
                 if (index >= 0) {
@@ -285,8 +362,8 @@ private fun App(baseUrl: String, token: String) {
                 }
             }
             is GridEvent.Activity -> status = event.activityType
-            is GridEvent.Artifact -> items.add(Item.Artifact(event.path))
-            is GridEvent.ApprovalRequired -> items.add(
+            is GridEvent.Artifact -> addDuringRun(Item.Artifact(event.path))
+            is GridEvent.ApprovalRequired -> addDuringRun(
                 Item.Approval(
                     id = event.approvalId,
                     tool = event.tool,
@@ -295,6 +372,7 @@ private fun App(baseUrl: String, token: String) {
                 )
             )
             is GridEvent.Stats -> {
+                finishActivity()
                 totalTokens += event.totalTokens
                 lastLatency = event.durationMs
                 lastTokens = event.totalTokens
@@ -311,10 +389,12 @@ private fun App(baseUrl: String, token: String) {
             }
             is GridEvent.Custom -> Unit
             is GridEvent.RunFinished -> {
+                finishActivity()
                 busy = false
                 status = "Ready"
             }
             is GridEvent.Error -> {
+                finishActivity()
                 items.add(Item.Error(event.message))
                 busy = false
                 status = "Error"
@@ -328,6 +408,7 @@ private fun App(baseUrl: String, token: String) {
         if (prompt.isEmpty() || busy || commandBusy) return
         if (promptOverride == null) input = TextFieldValue("")
         items.add(Item.User(prompt))
+        items.add(Item.Activity())
         busy = true
         status = "Sending"
         scope.launch {
@@ -336,10 +417,12 @@ private fun App(baseUrl: String, token: String) {
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (error: Exception) {
+                finishActivity()
                 val message = connectionAwareMessage(error, baseUrl)
                 items.add(Item.Error(message))
                 status = if (message.startsWith("GRID API is offline")) "API offline" else "Error"
             } finally {
+                finishActivity()
                 busy = false
             }
         }
@@ -363,6 +446,37 @@ private fun App(baseUrl: String, token: String) {
                 items.add(Item.Error(connectionAwareMessage(error, baseUrl)))
                 status = "Error"
             } finally {
+                commandBusy = false
+            }
+        }
+    }
+
+    fun saveAndExit() {
+        if (busy) {
+            items.add(Item.Note("Wait for the current response to finish before /exit."))
+            return
+        }
+        if (commandBusy) return
+        commandBusy = true
+        status = "Saving memory..."
+        scope.launch {
+            try {
+                val output = withContext(Dispatchers.IO) {
+                    postCommand(baseUrl, token, "/save")
+                }
+                items.add(Item.Note("$output\nClosing GRID."))
+                status = "Saved"
+                delay(900)
+                onExit()
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                items.add(
+                    Item.Error(
+                        "Could not save before exit: ${connectionAwareMessage(error, baseUrl)}"
+                    )
+                )
+                status = "Exit cancelled"
                 commandBusy = false
             }
         }
@@ -394,6 +508,7 @@ private fun App(baseUrl: String, token: String) {
                 items.clear()
                 status = "Ready"
             }
+            name == "/exit" || name == "/quit" -> saveAndExit()
             name == "/model" -> items.add(
                 Item.Note(
                     "Active model: ${model.ifBlank { "(unknown)" }}\n" +
@@ -525,6 +640,7 @@ private fun App(baseUrl: String, token: String) {
                             is Item.Assistant -> AssistantBubble(item)
                             is Item.Tool -> ToolCard(item)
                             is Item.Artifact -> ArtifactCard(item.path)
+                            is Item.Activity -> ActivityCard(item)
                             is Item.Approval -> ApprovalCard(
                                 approval = item,
                                 onApprove = { resolveApproval(index, item, "approve") },
@@ -844,6 +960,75 @@ private fun ApprovalCard(
             }
         }
     }
+}
+
+@Composable
+private fun ActivityCard(activity: Item.Activity) {
+    var dots by remember(activity.running) { mutableStateOf(1) }
+    var seconds by remember(activity.running) { mutableStateOf(0) }
+    LaunchedEffect(activity.running) {
+        if (!activity.running) return@LaunchedEffect
+        while (true) {
+            delay(450)
+            dots = (dots % 3) + 1
+        }
+    }
+    LaunchedEffect(activity.running) {
+        if (!activity.running) return@LaunchedEffect
+        while (true) {
+            delay(1_000)
+            seconds += 1
+        }
+    }
+    val summary = activityText(activity)
+    val label = when {
+        activity.total == 0 -> "Thinking" + ".".repeat(dots)
+        else -> "+$summary"
+    }
+    Surface(
+        color = Color(0xFF0E1711),
+        shape = RoundedCornerShape(8.dp),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Row(
+            Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            if (activity.running) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(13.dp),
+                    color = GridGreen,
+                    strokeWidth = 2.dp,
+                )
+            } else {
+                Text("✓", color = GridGreenDim, fontSize = 11.sp)
+            }
+            Spacer(Modifier.width(9.dp))
+            Text(
+                label,
+                color = if (activity.running) GridGreenDim else Muted,
+                fontSize = 11.sp,
+                fontFamily = FontFamily.Monospace,
+            )
+            if (activity.running && seconds > 0) {
+                Spacer(Modifier.width(8.dp))
+                Text("${seconds}s", color = Muted, fontSize = 10.sp)
+            }
+        }
+    }
+}
+
+private fun activityText(activity: Item.Activity): String {
+    val parts = mutableListOf<String>()
+    fun add(count: Int, singular: String, plural: String) {
+        if (count > 0) parts.add("$count ${if (count == 1) singular else plural}")
+    }
+    add(activity.commands, "command", "commands")
+    add(activity.edits, "edit", "edits")
+    add(activity.thoughts, "thought", "thoughts")
+    add(activity.reads, "read", "reads")
+    add(activity.tools, "tool", "tools")
+    return parts.joinToString(" · ")
 }
 
 @Composable

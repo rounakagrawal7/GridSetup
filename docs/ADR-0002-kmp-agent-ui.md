@@ -214,6 +214,9 @@ Landed:
 - `POST /api/v1/command` dispatches terminal-style host commands from the
   desktop (`/memory`, `/life`, `/plan`, `/ref`, `/jobs`, `/pb`, `/persona`,
   `/social`, `/comms`, `/ctf`, `/game`, `/gcal`, `/gsheet`, `/save`, `/export`).
+- Live run activity in the desktop: animated **Thinking…** with elapsed time,
+  then a compact `+commands · edits · thoughts · reads · tools` summary for
+  tool-using runs; `/exit` saves host memory and closes the window.
 
 Still open:
 

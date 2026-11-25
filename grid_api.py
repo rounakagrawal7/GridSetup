@@ -567,7 +567,15 @@ class GridAPIServer:
             return "Conversation memory unavailable."
         memory.save()
         name = getattr(self.runtime, "MEMORY_FILE", "memory.json")
-        return f"Memory saved to '{name}'."
+        message = f"Memory saved to '{name}'."
+        pb = getattr(tools, "pb", None) if tools is not None else None
+        if pb is not None and getattr(pb, "token", None):
+            try:
+                pb.sync_memory(memory.history, "grid")
+                message += " Synced to PocketBase."
+            except Exception as exc:
+                message += f" PocketBase sync failed: {exc}"
+        return message
 
     def _cmd_export(self, args: str) -> str:
         tools = getattr(self.runtime, "Tools", None)

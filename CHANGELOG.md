@@ -46,6 +46,11 @@
   `/memory`, `/life`, `/plan`, `/ref`, `/jobs`, `/pb`, `/persona`, `/social`,
   `/comms`, `/ctf`, `/game`, `/gcal`, `/gsheet`, `/save` and `/export` work
   directly from the desktop composer and render their output in chat.
+- Desktop run activity: while the model works, the chat shows an animated
+  **Thinking…** row with elapsed time; tool-using runs replace it with a live
+  summary of commands, edits, thoughts, reads and tools.
+- `/exit` saves host conversation memory (and syncs PocketBase when connected)
+  before closing the desktop window.
 - Forced `kotlinx-datetime` 0.6.2 on the desktop runtime because the AG-UI SDK
   still calls `Clock.System`, while Compose Material3 1.9 resolves 0.7.x.
 - Android companion: `androidApp` uses the Android-KMP library plugin in
