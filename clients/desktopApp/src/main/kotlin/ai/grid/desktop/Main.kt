@@ -261,6 +261,7 @@ private fun App(
     var runJob by remember { mutableStateOf<Job?>(null) }
     var commandBusy by remember { mutableStateOf(false) }
     var confirmShutdown by remember { mutableStateOf(false) }
+    var confirmClearHistory by remember { mutableStateOf(false) }
     var status by remember { mutableStateOf("Ready") }
     var threadId by remember { mutableStateOf(GridAgentClient.newThreadId()) }
     var model by remember { mutableStateOf("") }
@@ -898,6 +899,39 @@ private fun App(
         }
     }
 
+    fun clearHistory() {
+        if (busy) {
+            items.add(Item.Note("Stop the current response before clearing history."))
+            return
+        }
+        if (commandBusy) return
+        scope.launch {
+            commandBusy = true
+            status = "Clearing history..."
+            try {
+                val result = withContext(Dispatchers.IO) {
+                    clearThreadHistory(baseUrl, token)
+                }
+                threads = emptyList()
+                threadId = GridAgentClient.newThreadId()
+                items.clear()
+                items.add(Item.Note(result.message))
+                status = "Ready"
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                items.add(
+                    Item.Error(
+                        "Could not clear history: ${connectionAwareMessage(error, baseUrl)}"
+                    )
+                )
+                status = "Error"
+            } finally {
+                commandBusy = false
+            }
+        }
+    }
+
     fun changeModel(requested: String) {
         if (busy || commandBusy) {
             items.add(Item.Note("Wait for the current response to finish before switching models."))
@@ -956,6 +990,15 @@ private fun App(
             onProviderChange = { openProviderDialog() },
             onThreadOpen = { openThread(it) },
             onRefreshThreads = { refreshThreads() },
+            onClearHistory = {
+                if (busy || commandBusy) {
+                    items.add(
+                        Item.Note("Stop the current response before clearing history.")
+                    )
+                } else {
+                    confirmClearHistory = true
+                }
+            },
             onNewThread = {
                 threadId = GridAgentClient.newThreadId()
                 items.clear()
@@ -1072,6 +1115,36 @@ private fun App(
                     }
                 }
             },
+        )
+    }
+    if (confirmClearHistory) {
+        AlertDialog(
+            onDismissRequest = { confirmClearHistory = false },
+            title = { Text("Clear thread history?") },
+            text = {
+                Text(
+                    "This deletes saved conversations only. Memory, user profile, " +
+                        "persona, goals and config are not touched."
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        confirmClearHistory = false
+                        clearHistory()
+                    }
+                ) {
+                    Text("Clear", color = Danger)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmClearHistory = false }) {
+                    Text("Cancel", color = Muted)
+                }
+            },
+            containerColor = PanelRaised,
+            titleContentColor = Color.White,
+            textContentColor = Muted,
         )
     }
 }
@@ -1487,6 +1560,7 @@ private fun Sidebar(
     onProviderChange: () -> Unit,
     onThreadOpen: (String) -> Unit,
     onRefreshThreads: () -> Unit,
+    onClearHistory: () -> Unit,
     onNewThread: () -> Unit,
     onQuickPrompt: (String) -> Unit,
 ) {
@@ -1593,9 +1667,22 @@ private fun Sidebar(
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text("HISTORY", color = Muted, fontSize = 10.sp, letterSpacing = 1.5.sp)
             Spacer(Modifier.weight(1f))
-            TextButton(onClick = onRefreshThreads) {
-                Text("Refresh", color = Muted, fontSize = 9.sp)
-            }
+            Text(
+                "Refresh",
+                color = Muted,
+                fontSize = 9.sp,
+                modifier = Modifier
+                    .clickable { onRefreshThreads() }
+                    .padding(horizontal = 4.dp, vertical = 2.dp),
+            )
+            Text(
+                "Clear",
+                color = Danger,
+                fontSize = 9.sp,
+                modifier = Modifier
+                    .clickable { onClearHistory() }
+                    .padding(horizontal = 4.dp, vertical = 2.dp),
+            )
         }
         if (threads.isEmpty()) {
             Text("No saved threads", color = Muted, fontSize = 10.sp)
@@ -2262,6 +2349,11 @@ private data class StoredMessage(
     val args: String = "",
 )
 
+private data class ClearHistoryResult(
+    val cleared: Int,
+    val message: String,
+)
+
 private fun providerLabel(id: String): String =
     DEFAULT_PROVIDERS.firstOrNull { it.id == id }?.name ?: id.ifBlank { "unknown" }
 
@@ -2302,6 +2394,40 @@ private fun fetchTools(baseUrl: String, token: String): List<ToolInfo>? {
         }
     } catch (_: Exception) {
         null
+    }
+}
+
+private fun clearThreadHistory(
+    baseUrl: String,
+    token: String,
+): ClearHistoryResult {
+    val connection = URI.create("$baseUrl/api/v1/threads/clear")
+        .toURL().openConnection() as HttpURLConnection
+    connection.requestMethod = "POST"
+    connection.doOutput = true
+    connection.setRequestProperty("Authorization", "Bearer $token")
+    connection.setRequestProperty("Content-Type", "application/json")
+    connection.connectTimeout = 5000
+    connection.readTimeout = 15000
+    return try {
+        connection.outputStream.use { it.write(ByteArray(0)) }
+        val code = connection.responseCode
+        val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+        val text = stream?.bufferedReader()?.use { it.readText() }.orEmpty()
+        val root = Json.parseToJsonElement(text.ifBlank { "{}" }).jsonObject
+        if (code !in 200..299) {
+            throw IllegalStateException(
+                root["error"]?.jsonPrimitive?.contentOrNull
+                    ?: "Could not clear history (HTTP $code)"
+            )
+        }
+        ClearHistoryResult(
+            cleared = root["cleared"]?.jsonPrimitive?.intOrNull ?: 0,
+            message = root["message"]?.jsonPrimitive?.contentOrNull
+                ?: "Thread history cleared. Memory and persona were not changed.",
+        )
+    } finally {
+        connection.disconnect()
     }
 }
 

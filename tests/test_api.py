@@ -306,6 +306,25 @@ class APITestCase(unittest.TestCase):
         self.assertEqual(messages[0]["content"], "remember this")
         self.assertEqual(messages[2]["content"], "second turn")
 
+    def test_clear_threads_only_clears_threads(self):
+        self._events(
+            {
+                "threadId": "thr_clear",
+                "messages": [{"id": "m1", "role": "user", "content": "temporary"}],
+            }
+        )
+        before = requests.get(f"{self.base}/threads", headers=self.headers).json()
+        self.assertEqual(len(before["threads"]), 1)
+        response = requests.post(
+            f"{self.base}/threads/clear", headers=self.headers, timeout=5
+        )
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["cleared"], 1)
+        after = requests.get(f"{self.base}/threads", headers=self.headers).json()
+        self.assertEqual(after["threads"], [])
+
     def test_tool_result_is_not_duplicated_as_text(self):
         saved_registry = dict(Tools.registry)
         saved_enabled = set(Tools.enabled)

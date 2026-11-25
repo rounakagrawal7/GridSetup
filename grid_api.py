@@ -201,6 +201,14 @@ class ThreadStore:
             }
             self._save()
 
+    def clear(self) -> int:
+        """Delete saved threads only; memory and persona live elsewhere."""
+        with self._lock:
+            count = len(self._threads)
+            self._threads = {}
+            self._save()
+            return count
+
 
 class SSEStream:
     """Thread-safe SSE writer with a keep-alive comment."""
@@ -888,6 +896,14 @@ class GridAPIServer:
             output = str(output)
         return 200, {"ok": True, "command": name, "output": output}
 
+    def _clear_threads(self) -> Dict[str, Any]:
+        cleared = self.threads.clear()
+        return {
+            "ok": True,
+            "cleared": cleared,
+            "message": f"Cleared {cleared} saved thread(s). Memory, profile and persona were not changed.",
+        }
+
     def _rea_reports(self) -> List[Dict[str, Any]]:
         rows = []
         if not self.refs_dir.exists():
@@ -1320,6 +1336,9 @@ class GridAPIServer:
                 if path == "/api/v1/provider/models":
                     code, payload = server._provider_models(self._read_json())
                     server._json(self, code, payload)
+                    return
+                if path == "/api/v1/threads/clear":
+                    server._json(self, 200, server._clear_threads())
                     return
                 if path == "/api/v1/command":
                     body = self._read_json()

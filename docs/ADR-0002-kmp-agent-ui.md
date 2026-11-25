@@ -227,7 +227,7 @@ Landed:
 - Thread replay: `/api/v1/agent` appends each turn to the thread store, and the
   desktop sidebar lists persisted threads and reloads their messages and tool
   cards. Clicking history during a run stops the run first; the composer also
-  has a Stop button.
+  has a Stop button. `POST /api/v1/threads/clear` clears saved threads only.
 
 Still open:
 
