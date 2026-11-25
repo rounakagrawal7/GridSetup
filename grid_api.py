@@ -376,10 +376,27 @@ class GridAPIServer:
         backend_cls = getattr(self.runtime, "LLMBackend", None)
         if backend_cls is None:
             return 500, {"ok": False, "error": "LLM backend is unavailable"}
+        key = api_key or (cfg.get(key_name, "") if key_name else "lm-studio")
         try:
-            models = list(backend_cls.fetch_models(provider, base_url) or [])
+            if provider == "ollama":
+                models = list(backend_cls.fetch_models(provider, base_url) or [])
+            else:
+                openai_cls = getattr(self.runtime, "OpenAI", None)
+                if openai_cls is None:
+                    return 400, {
+                        "ok": False,
+                        "error": "the 'openai' package is not installed",
+                    }
+                client = openai_cls(base_url=base_url, api_key=key)
+                models = [model.id for model in client.models.list()]
         except Exception as exc:
-            return 500, {"ok": False, "error": f"could not fetch models: {exc}"}
+            detail = str(exc)
+            if key and len(key) > 8:
+                detail = detail.replace(key, "***")
+            return 502, {
+                "ok": False,
+                "error": f"{info['name']} model list failed: {detail}",
+            }
         return 200, {
             "ok": True,
             "provider": provider,
