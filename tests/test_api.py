@@ -338,6 +338,14 @@ class APITestCase(unittest.TestCase):
         types = [event["type"] for event in events]
         self.assertIn("TOOL_CALL_RESULT", types)
         self.assertNotIn("TEXT_MESSAGE_CONTENT", types)
+        detail = requests.get(
+            f"{self.base}/threads/thr_tool", headers=self.headers
+        ).json()
+        messages = detail["thread"]["messages"]
+        self.assertEqual([message["role"] for message in messages], ["user", "tool", "assistant"])
+        self.assertEqual(messages[1]["name"], "fake_echo")
+        self.assertEqual(messages[1]["args"], "x")
+        self.assertEqual(messages[1]["content"], "tool-output")
 
     def test_rejects_missing_user_message(self):
         response = requests.post(

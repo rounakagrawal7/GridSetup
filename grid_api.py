@@ -167,7 +167,13 @@ class ThreadStore:
                     "id": thread_id,
                     "title": item.get("title", ""),
                     "updated_at": item.get("updated_at", ""),
-                    "message_count": len(item.get("messages") or []),
+                    "message_count": len(
+                        [
+                            message
+                            for message in (item.get("messages") or [])
+                            if message.get("role") in {"user", "assistant"}
+                        ]
+                    ),
                 }
                 for thread_id, item in self._threads.items()
             ]
@@ -1027,6 +1033,8 @@ class GridAPIServer:
         )
         assistant_text = ""
         tool_results: List[str] = []
+        tool_calls: Dict[str, Dict[str, Any]] = {}
+        tool_order: List[str] = []
         started_at = time.time()
         backend = getattr(self.orchestrator, "backend", None)
         if hasattr(backend, "reset_usage"):
@@ -1036,8 +1044,32 @@ class GridAPIServer:
                 pass
 
         def sink(event: Dict[str, Any]) -> None:
-            if event.get("type") == "TOOL_CALL_RESULT":
-                tool_results.append(str(event.get("content") or ""))
+            kind = event.get("type")
+            call_id = str(event.get("toolCallId") or "")
+            if kind == "TOOL_CALL_START" and call_id:
+                tool_calls[call_id] = {
+                    "id": call_id,
+                    "role": "tool",
+                    "name": str(event.get("toolCallName") or ""),
+                    "args": "",
+                    "content": "",
+                }
+                tool_order.append(call_id)
+            elif kind == "TOOL_CALL_ARGS" and call_id in tool_calls:
+                delta = str(event.get("delta") or "")
+                try:
+                    parsed = json.loads(delta)
+                except (TypeError, ValueError, json.JSONDecodeError):
+                    parsed = None
+                if isinstance(parsed, dict) and "input" in parsed:
+                    tool_calls[call_id]["args"] = str(parsed.get("input") or "")
+                else:
+                    tool_calls[call_id]["args"] += delta
+            elif kind == "TOOL_CALL_RESULT":
+                content = str(event.get("content") or "")
+                tool_results.append(content)
+                if call_id in tool_calls:
+                    tool_calls[call_id]["content"] = content
             stream.send(event)
 
         try:
@@ -1113,7 +1145,7 @@ class GridAPIServer:
                     "outcome": {"type": "success"},
                 }
             )
-            stored = [
+            incoming = [
                 {
                     "id": str(message.get("id") or f"msg_{uuid.uuid4().hex[:12]}"),
                     "role": str(message.get("role") or "user"),
@@ -1122,13 +1154,21 @@ class GridAPIServer:
                 for message in messages
                 if isinstance(message, dict) and message.get("role") in {"user", "assistant"}
             ]
-            stored.append(
+            turn_messages = list(incoming)
+            turn_messages.extend(
+                tool_calls[call_id]
+                for call_id in tool_order
+                if call_id in tool_calls
+            )
+            turn_messages.append(
                 {"id": message_id, "role": "assistant", "content": display_text}
             )
             existing = self.threads.get(thread_id) or {}
             prior = existing.get("messages") if isinstance(existing, dict) else None
-            if isinstance(prior, list) and len(stored) <= 2:
-                stored = list(prior) + stored
+            if isinstance(prior, list) and len(incoming) <= 1:
+                stored = list(prior) + turn_messages
+            else:
+                stored = turn_messages
             self.threads.put(thread_id, stored)
         except Exception as exc:
             stream.send({"type": "STEP_FINISHED", "stepName": step_name})

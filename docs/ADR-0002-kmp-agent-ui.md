@@ -225,7 +225,9 @@ Landed:
   plus `POST /api/v1/provider/models`, with Ollama, LM Studio, OpenRouter and
   OpenAI. The desktop can write `config.json` and start the local host.
 - Thread replay: `/api/v1/agent` appends each turn to the thread store, and the
-  desktop sidebar lists persisted threads and reloads their messages.
+  desktop sidebar lists persisted threads and reloads their messages and tool
+  cards. Clicking history during a run stops the run first; the composer also
+  has a Stop button.
 
 Still open:
 

@@ -94,6 +94,7 @@ import java.nio.file.Files
 import java.nio.file.Path
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -257,6 +258,7 @@ private fun App(
     var refreshTick by remember { mutableStateOf(0) }
     var input by remember { mutableStateOf(TextFieldValue("")) }
     var busy by remember { mutableStateOf(false) }
+    var runJob by remember { mutableStateOf<Job?>(null) }
     var commandBusy by remember { mutableStateOf(false) }
     var confirmShutdown by remember { mutableStateOf(false) }
     var status by remember { mutableStateOf("Ready") }
@@ -486,7 +488,7 @@ private fun App(
         items.add(Item.Activity())
         busy = true
         status = "Sending"
-        scope.launch {
+        runJob = scope.launch {
             try {
                 client.run(prompt, threadId).collect { handle(it) }
             } catch (cancelled: CancellationException) {
@@ -499,6 +501,7 @@ private fun App(
             } finally {
                 finishActivity()
                 busy = false
+                runJob = null
             }
         }
     }
@@ -834,9 +837,21 @@ private fun App(
         }
     }
 
+    fun stopRun() {
+        if (!busy) return
+        runJob?.cancel()
+        runJob = null
+        busy = false
+        finishActivity()
+        status = "Stopped"
+    }
+
     fun openThread(id: String) {
-        if (busy || commandBusy) {
-            items.add(Item.Note("Wait for the current response to finish before opening a thread."))
+        if (busy) {
+            stopRun()
+        }
+        if (commandBusy) {
+            items.add(Item.Note("Wait for the current command to finish before opening a thread."))
             return
         }
         if (id == threadId) return
@@ -857,6 +872,16 @@ private fun App(
                     "user" -> items.add(Item.User(message.content))
                     "assistant" -> if (message.content.isNotBlank()) {
                         items.add(Item.Assistant(message.id, message.content))
+                    }
+                    "tool" -> if (message.name.isNotBlank()) {
+                        items.add(
+                            Item.Tool(
+                                callId = message.id,
+                                name = message.name,
+                                args = message.args,
+                                result = message.content.ifBlank { "(no output)" },
+                            )
+                        )
                     }
                 }
             }
@@ -981,12 +1006,14 @@ private fun App(
             Composer(
                 input = input,
                 busy = busy || commandBusy,
+                runActive = busy,
                 enabled = token.isNotBlank(),
                 focusRequester = inputFocus,
                 tools = tools,
                 onInput = { input = it },
                 onCommand = { handleSlashCommand(it) },
                 onSend = { send() },
+                onStop = { stopRun() },
             )
         }
     }
@@ -1972,12 +1999,14 @@ private fun NoteCard(message: String) {
 private fun Composer(
     input: TextFieldValue,
     busy: Boolean,
+    runActive: Boolean,
     enabled: Boolean,
     focusRequester: FocusRequester,
     tools: List<ToolInfo>,
     onInput: (TextFieldValue) -> Unit,
     onCommand: (String) -> Boolean,
     onSend: () -> Unit,
+    onStop: () -> Unit,
 ) {
     val text = input.text
     val allCommands = (
@@ -2133,28 +2162,37 @@ private fun Composer(
                 enabled = enabled,
             )
             Spacer(Modifier.width(10.dp))
-            Button(
-                onClick = {
-                    val trimmed = text.trim()
-                    if (trimmed.startsWith("/")) {
-                        onCommand(trimmed)
-                        onInput(TextFieldValue(""))
+            if (runActive) {
+                OutlinedButton(
+                    onClick = onStop,
+                    modifier = Modifier.height(56.dp),
+                ) {
+                    Text("Stop", color = Danger)
+                }
+            } else {
+                Button(
+                    onClick = {
+                        val trimmed = text.trim()
+                        if (trimmed.startsWith("/")) {
+                            onCommand(trimmed)
+                            onInput(TextFieldValue(""))
+                        } else {
+                            onSend()
+                        }
+                    },
+                    enabled = enabled && !busy && text.isNotBlank(),
+                    colors = ButtonDefaults.buttonColors(containerColor = GridGreen, contentColor = Color.Black),
+                    modifier = Modifier.height(56.dp),
+                ) {
+                    if (busy) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(18.dp),
+                            color = Color.Black,
+                            strokeWidth = 2.dp,
+                        )
                     } else {
-                        onSend()
+                        Text("Send")
                     }
-                },
-                enabled = enabled && !busy && text.isNotBlank(),
-                colors = ButtonDefaults.buttonColors(containerColor = GridGreen, contentColor = Color.Black),
-                modifier = Modifier.height(56.dp),
-            ) {
-                if (busy) {
-                    CircularProgressIndicator(
-                        modifier = Modifier.size(18.dp),
-                        color = Color.Black,
-                        strokeWidth = 2.dp,
-                    )
-                } else {
-                    Text("Send")
                 }
             }
         }
@@ -2220,6 +2258,8 @@ private data class StoredMessage(
     val id: String,
     val role: String,
     val content: String,
+    val name: String = "",
+    val args: String = "",
 )
 
 private fun providerLabel(id: String): String =
@@ -2329,6 +2369,8 @@ private fun fetchThreadMessages(
                             ?: GridAgentClient.newId("msg"),
                         role = role,
                         content = content,
+                        name = item["name"]?.jsonPrimitive?.contentOrNull ?: "",
+                        args = item["args"]?.jsonPrimitive?.contentOrNull ?: "",
                     )
                 }
             }
