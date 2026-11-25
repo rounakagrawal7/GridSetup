@@ -2,6 +2,8 @@
   "backend_type": "ollama",
   "base_url": "http://localhost:11434",
   "model": "gemma4:e2b",
+  "openai_api_key": "",
+  "openrouter_api_key": "",
   "telegram_bot_token": "",
   "telegram_chat_id": "",
   "life": {

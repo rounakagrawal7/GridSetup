@@ -371,6 +371,9 @@ Endpoints:
 | `GET` | `/api/v1/health` | protocol, model, thread/report counts |
 | `GET` | `/api/v1/model` | active model and available models |
 | `POST` | `/api/v1/model` | switch the active model |
+| `GET` | `/api/v1/provider` | active provider and supported providers |
+| `POST` | `/api/v1/provider` | switch provider, URL, key and model |
+| `POST` | `/api/v1/provider/models` | list models for a provider without switching |
 | `POST` | `/api/v1/command` | run a terminal-style local command (`/memory`, `/life`, `/plan`, `/jobs`, ...) |
 | `POST` | `/api/v1/shutdown` | save memory and stop the API host |
 | `GET` | `/api/v1/threads` | thread summaries |
@@ -399,7 +402,7 @@ Config:
 The Compose Desktop shell and Android companion live under `clients/` and talk to `--api` over AG-UI.
 
 ```powershell
-# terminal 1: host
+# terminal 1 (optional): the desktop can start the host for you
 python grid_agent.py --api --no-input
 
 # terminal 2: desktop
@@ -407,7 +410,9 @@ cd clients
 .\gradlew.bat :desktopApp:run
 ```
 
-The desktop finds the token at `../run/api_token`, `run/api_token`, or `GRID_API_TOKEN`; pass `--url` or `--token-file` to override. It renders user/assistant messages, live tool cards, REA report artifacts, and approval requests. Tool-only runs show a single tool card (no duplicated assistant bubble); each assistant reply carries its duration and token count, the sidebar has a session token meter, and the chat has a visible scrollbar. User messages, assistant replies, server-command notes and tool outputs each have a small copy icon that copies the full text. While a run is active the chat shows a live **Thinking…** row with elapsed time, then a compact process summary such as `+2 commands · 1 edit · 3 thoughts · 1 read · 1 tool`. The model is shown in the sidebar and can be switched from the **Change model** menu without restarting. Type `/` in the composer for the command palette (`/help`, `/new`, `/clear`, `/exit`, `/model`, `/tokens`, `/rea`, `/tools`, `/tool`, every registered GRID tool, and terminal-style commands), with arrow-key selection and Tab completion; the cursor lands at the end of the completed command. Local commands such as `/memory`, `/life`, `/plan`, `/ref`, `/jobs`, `/pb`, `/persona`, `/social`, `/comms`, `/ctf`, `/game`, `/gcal`, `/gsheet`, `/save` and `/export` run against the host through `POST /api/v1/command` and render their output in chat. `/exit` saves host conversation memory (and syncs PocketBase when connected) before closing the desktop. `/shutdown` asks for confirmation, then saves and stops the API host, autopilot and Android connectivity before closing the desktop.
+On a machine with no running host, the desktop opens a **Start GRID** screen instead of failing: choose **Ollama**, **LM Studio**, **OpenRouter** or **OpenAI**, set the base URL, API key (when needed) and model, then click **Start GRID host**. It writes `config.json` and launches the local Python host itself. The provider can be changed later from **Change provider** in the left sidebar.
+
+The desktop finds the token at `../run/api_token`, `run/api_token`, or `GRID_API_TOKEN`; pass `--url` or `--token-file` to override. It renders user/assistant messages, live tool cards, REA report artifacts, and approval requests. Tool-only runs show a single tool card (no duplicated assistant bubble); each assistant reply carries its duration and token count, the sidebar has a session token meter, and the chat has a visible scrollbar. User messages, assistant replies, server-command notes and tool outputs each have a small copy icon that copies the full text. While a run is active the chat shows a live **Thinking…** row with elapsed time, then a compact process summary such as `+2 commands · 1 edit · 3 thoughts · 1 read · 1 tool`. The model is shown in the sidebar and can be switched from the **Change model** menu without restarting. Type `/` in the composer for the command palette (`/help`, `/new`, `/clear`, `/exit`, `/provider`, `/model`, `/tokens`, `/rea`, `/tools`, `/tool`, every registered GRID tool, and terminal-style commands), with arrow-key selection and Tab completion; the cursor lands at the end of the completed command. Local commands such as `/memory`, `/life`, `/plan`, `/ref`, `/jobs`, `/pb`, `/persona`, `/social`, `/comms`, `/ctf`, `/game`, `/gcal`, `/gsheet`, `/save` and `/export` run against the host through `POST /api/v1/command` and render their output in chat. `/exit` saves host conversation memory (and syncs PocketBase when connected) before closing the desktop. `/shutdown` asks for confirmation, then saves and stops the API host, autopilot and Android connectivity before closing the desktop.
 
 Android:
 

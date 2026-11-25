@@ -104,7 +104,7 @@ def build_local_context(orchestrator, life) -> str:
         return ""
     backend = getattr(orchestrator, "backend", None)
     backend_type = str(getattr(backend, "type", "") or "").lower()
-    if backend_type == "openrouter" and not cfg.get("allow_cloud_context", False):
+    if backend_type in ("openrouter", "openai") and not cfg.get("allow_cloud_context", False):
         return (
             "Local context omitted: the cloud backend is active. "
             "Set life.allow_cloud_context=true to include it."

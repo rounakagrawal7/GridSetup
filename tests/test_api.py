@@ -180,6 +180,55 @@ class APITestCase(unittest.TestCase):
         self.assertTrue(self.server.shutdown_event.wait(2))
         self.assertTrue(getattr(runtime, "EXPLICIT_SHUTDOWN", False))
 
+    def test_provider_info_and_switch(self):
+        info = requests.get(f"{self.base}/provider", headers=self.headers).json()
+        self.assertTrue(info["ok"])
+        self.assertEqual(len(info["providers"]), 4)
+        ids = {row["id"] for row in info["providers"]}
+        self.assertEqual(ids, {"ollama", "lm_studio", "openrouter", "openai"})
+
+        class FakeLLM:
+            def __init__(self, backend_type, model, base_url):
+                self.type = backend_type
+                self.model = model
+                self.base_url = base_url
+
+        with mock.patch.object(grid_agent, "HAS_OLLAMA", True), \
+                mock.patch.object(grid_agent, "LLMBackend", FakeLLM), \
+                mock.patch.object(grid_agent, "save_config") as save:
+            response = requests.post(
+                f"{self.base}/provider",
+                json={
+                    "provider": "ollama",
+                    "model": "new-model",
+                    "base_url": "http://localhost:11434",
+                },
+                headers=self.headers,
+                timeout=5,
+            )
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json()["ok"])
+        self.assertEqual(self.orch.backend.type, "ollama")
+        self.assertEqual(self.orch.backend.model, "new-model")
+        save.assert_called()
+
+    def test_provider_models_endpoint(self):
+        class FakeLLM:
+            @staticmethod
+            def fetch_models(provider, base_url):
+                return ["model-a", "model-b"]
+
+        with mock.patch.object(grid_agent, "HAS_OLLAMA", True), \
+                mock.patch.object(grid_agent, "LLMBackend", FakeLLM):
+            response = requests.post(
+                f"{self.base}/provider/models",
+                json={"provider": "ollama"},
+                headers=self.headers,
+                timeout=5,
+            )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["models"], ["model-a", "model-b"])
+
     def test_model_info_and_switch(self):
         info = requests.get(f"{self.base}/model", headers=self.headers).json()
         self.assertEqual(info["model"], "fake-model")

@@ -9,6 +9,8 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.VerticalScrollbar
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -22,6 +24,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -71,6 +74,7 @@ import androidx.compose.ui.input.key.type
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -94,6 +98,9 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonArray
@@ -139,6 +146,7 @@ private val SLASH_COMMANDS = listOf(
     SlashCommand("/exit", "Save memory and close GRID"),
     SlashCommand("/shutdown", "Save and stop the GRID host"),
     SlashCommand("/model", "Show the active model and how to switch"),
+    SlashCommand("/provider", "Switch LLM provider"),
     SlashCommand("/tokens", "Show session token and timing stats"),
     SlashCommand(
         "/rea",
@@ -210,6 +218,7 @@ fun main(args: Array<String>) {
     application {
         val baseUrl = argument(args, "--url") ?: "http://127.0.0.1:8771"
         val token = loadToken(args)
+        val projectRoot = argument(args, "--root")?.let { File(it) } ?: findProjectRoot()
         Window(
             onCloseRequest = ::exitApplication,
             title = "GRID",
@@ -225,18 +234,26 @@ fun main(args: Array<String>) {
                     onSurface = Color.White,
                 )
             ) {
-                App(baseUrl.trimEnd('/'), token, onExit = ::exitApplication)
+                App(baseUrl.trimEnd('/'), token, projectRoot, onExit = ::exitApplication)
             }
         }
     }
 }
 
 @Composable
-private fun App(baseUrl: String, token: String, onExit: () -> Unit) {
+private fun App(
+    baseUrl: String,
+    initialToken: String,
+    projectRoot: File?,
+    onExit: () -> Unit,
+) {
     val scope = rememberCoroutineScope()
     val items = remember { mutableStateListOf<Item>() }
     val listState = rememberLazyListState()
     val inputFocus = remember { FocusRequester() }
+    var token by remember { mutableStateOf(initialToken) }
+    var apiOnline by remember { mutableStateOf<Boolean?>(null) }
+    var refreshTick by remember { mutableStateOf(0) }
     var input by remember { mutableStateOf(TextFieldValue("")) }
     var busy by remember { mutableStateOf(false) }
     var commandBusy by remember { mutableStateOf(false) }
@@ -245,42 +262,78 @@ private fun App(baseUrl: String, token: String, onExit: () -> Unit) {
     var threadId by remember { mutableStateOf(GridAgentClient.newThreadId()) }
     var model by remember { mutableStateOf("") }
     var models by remember { mutableStateOf(emptyList<String>()) }
+    var provider by remember { mutableStateOf("") }
+    var providerInfo by remember { mutableStateOf<ProviderInfo?>(null) }
+    var showProviderDialog by remember { mutableStateOf(false) }
     var tools by remember { mutableStateOf(emptyList<ToolInfo>()) }
     var totalTokens by remember { mutableStateOf(0) }
     var lastLatency by remember { mutableStateOf(0L) }
     var lastTokens by remember { mutableStateOf(0) }
     var runCount by remember { mutableStateOf(0) }
-    val client = remember { GridAgentClient(baseUrl, token) }
+    var setupProvider by remember { mutableStateOf("ollama") }
+    var setupUrl by remember { mutableStateOf(providerDefaultUrl("ollama")) }
+    var setupKey by remember { mutableStateOf("") }
+    var setupModel by remember { mutableStateOf("") }
+    var setupModels by remember { mutableStateOf(emptyList<String>()) }
+    var setupKeySet by remember { mutableStateOf(false) }
+    var setupBusy by remember { mutableStateOf(false) }
+    var setupMessage by remember { mutableStateOf("") }
+    val client = remember(baseUrl, token) { GridAgentClient(baseUrl, token) }
 
-    LaunchedEffect(baseUrl, token) {
-        if (token.isBlank()) {
-            status = "Token missing"
+    LaunchedEffect(baseUrl, token, refreshTick) {
+        var candidate = token
+        if (candidate.isBlank()) {
+            candidate = withContext(Dispatchers.IO) { loadToken(emptyArray()) }
+            if (candidate.isNotBlank()) {
+                token = candidate
+                return@LaunchedEffect
+            }
+        }
+        if (candidate.isBlank()) {
+            apiOnline = false
+            status = "Setup required"
             return@LaunchedEffect
         }
-        val online = withContext(Dispatchers.IO) { apiHealthy(baseUrl, token) }
+        val online = withContext(Dispatchers.IO) { apiHealthy(baseUrl, candidate) }
         if (!online) {
-            status = "API offline"
-            if (items.none { it is Item.Error && it.message.startsWith("GRID API is offline") }) {
-                items.add(
-                    Item.Error(
-                        "GRID API is offline at $baseUrl.\n" +
-                            "Start it with: python grid_agent.py --api --no-input"
-                    )
-                )
-            }
-        } else {
-            val info = withContext(Dispatchers.IO) { fetchModelInfo(baseUrl, token) }
-            if (info != null) {
-                model = info.model
-                models = info.models
-            }
-            val toolList = withContext(Dispatchers.IO) { fetchTools(baseUrl, token) }
-            if (toolList != null) tools = toolList
+            apiOnline = false
+            status = "Host offline"
+            return@LaunchedEffect
+        }
+        apiOnline = true
+        status = "Ready"
+        val pInfo = withContext(Dispatchers.IO) { fetchProviderInfo(baseUrl, candidate) }
+        if (pInfo != null) {
+            provider = pInfo.provider
+            providerInfo = pInfo
+        }
+        val info = withContext(Dispatchers.IO) { fetchModelInfo(baseUrl, candidate) }
+        if (info != null) {
+            model = info.model
+            models = info.models
+        }
+        val toolList = withContext(Dispatchers.IO) { fetchTools(baseUrl, candidate) }
+        if (toolList != null) tools = toolList
+    }
+
+    LaunchedEffect(projectRoot, apiOnline) {
+        if (apiOnline != false) return@LaunchedEffect
+        val root = projectRoot ?: return@LaunchedEffect
+        val cfg = readConfig(root)
+        val savedProvider = cfg["backend_type"]?.jsonPrimitive?.contentOrNull ?: "ollama"
+        setupProvider = savedProvider
+        setupUrl = cfg["base_url"]?.jsonPrimitive?.contentOrNull
+            ?: providerDefaultUrl(savedProvider)
+        setupModel = cfg["model"]?.jsonPrimitive?.contentOrNull ?: ""
+        setupKeySet = when (savedProvider) {
+            "openrouter" -> !cfg["openrouter_api_key"]?.jsonPrimitive?.contentOrNull.isNullOrBlank()
+            "openai" -> !cfg["openai_api_key"]?.jsonPrimitive?.contentOrNull.isNullOrBlank()
+            else -> true
         }
     }
 
-    LaunchedEffect(Unit) {
-        inputFocus.requestFocus()
+    LaunchedEffect(apiOnline) {
+        if (apiOnline == true) inputFocus.requestFocus()
     }
 
     fun activityIndex(): Int = items.indexOfLast { it is Item.Activity }
@@ -525,6 +578,141 @@ private fun App(baseUrl: String, token: String, onExit: () -> Unit) {
         }
     }
 
+    fun openProviderDialog() {
+        if (busy || commandBusy) {
+            items.add(Item.Note("Wait for the current response to finish before switching providers."))
+            return
+        }
+        showProviderDialog = true
+    }
+
+    fun selectSetupProvider(id: String) {
+        val changed = setupProvider != id
+        setupProvider = id
+        if (changed) setupModel = ""
+        if (setupUrl.isBlank() || DEFAULT_PROVIDERS.any { it.defaultUrl == setupUrl }) {
+            setupUrl = providerDefaultUrl(id)
+        }
+        setupModels = emptyList()
+        setupKey = ""
+        setupKeySet = projectRoot?.let { hasProviderKey(it, id) } ?: false
+    }
+
+    fun loadSetupModels() {
+        if (setupBusy) return
+        if (setupProvider == "ollama" && setupUrl.isBlank()) {
+            setupMessage = "Enter the Ollama URL first."
+            return
+        }
+        setupBusy = true
+        setupMessage = "Loading models..."
+        scope.launch {
+            try {
+                val list = withContext(Dispatchers.IO) {
+                    fetchModelsDirect(setupProvider, setupUrl, setupKey)
+                }
+                setupModels = list
+                if (setupModel.isBlank() && list.isNotEmpty()) setupModel = list.first()
+                setupMessage = if (list.isEmpty()) {
+                    "No models found. Check the URL, server and API key."
+                } else {
+                    "${list.size} models loaded."
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                setupMessage = "Could not load models: ${error.message}"
+            } finally {
+                setupBusy = false
+            }
+        }
+    }
+
+    fun startLocalHost() {
+        if (setupBusy) return
+        val root = projectRoot
+        if (root == null) {
+            setupMessage = "Project root not found. Start the desktop from the GRID folder or pass --root."
+            return
+        }
+        if (setupUrl.isBlank() || setupModel.isBlank()) {
+            setupMessage = "Provider URL and model are required."
+            return
+        }
+        if (providerNeedsKey(setupProvider) && setupKey.isBlank() && !setupKeySet) {
+            setupMessage = "${providerLabel(setupProvider)} API key is required."
+            return
+        }
+        setupBusy = true
+        setupMessage = "Writing config..."
+        scope.launch {
+            try {
+                withContext(Dispatchers.IO) {
+                    writeConfig(root, setupProvider, setupUrl, setupModel, setupKey)
+                    val existing = readToken(root).ifBlank { token }
+                    if (!apiHealthy(baseUrl, existing)) {
+                        startHost(root)
+                    }
+                }
+                setupMessage = "Starting GRID host..."
+                val found = withContext(Dispatchers.IO) {
+                    repeat(90) {
+                        val candidate = readToken(root).ifBlank { loadToken(emptyArray()) }
+                        if (candidate.isNotBlank() && apiHealthy(baseUrl, candidate)) {
+                            return@withContext candidate
+                        }
+                        delay(500)
+                    }
+                    ""
+                }
+                if (found.isBlank()) {
+                    setupMessage = "Host did not start. Check run/desktop_host.log."
+                    setupBusy = false
+                } else {
+                    token = found
+                    setupMessage = "Connected."
+                    setupBusy = false
+                    refreshTick += 1
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                setupMessage = "Could not start host: ${error.message}"
+                setupBusy = false
+            }
+        }
+    }
+
+    fun retryHost() {
+        if (setupBusy) return
+        setupBusy = true
+        setupMessage = "Checking host..."
+        scope.launch {
+            try {
+                val candidate = withContext(Dispatchers.IO) {
+                    projectRoot?.let { readToken(it) }.orEmpty()
+                        .ifBlank { loadToken(emptyArray()) }
+                }
+                if (candidate.isBlank()) {
+                    setupMessage = "No API token found. Start the host first."
+                } else {
+                    val online = withContext(Dispatchers.IO) {
+                        apiHealthy(baseUrl, candidate)
+                    }
+                    if (online) {
+                        token = candidate
+                        setupMessage = "Connected."
+                        refreshTick += 1
+                    } else {
+                        setupMessage = "Host is still offline at $baseUrl."
+                    }
+                }
+            } finally {
+                setupBusy = false
+            }
+        }
+    }
+
     fun handleSlashCommand(raw: String): Boolean {
         val command = raw.trim()
         if (!command.startsWith("/")) return false
@@ -568,6 +756,7 @@ private fun App(baseUrl: String, token: String, onExit: () -> Unit) {
                         "Use Change model in the sidebar to switch."
                 )
             )
+            name == "/provider" -> openProviderDialog()
             name == "/tokens" -> items.add(
                 Item.Note(
                     "Session: $runCount runs · ${formatTokens(totalTokens)} tokens\n" +
@@ -636,6 +825,10 @@ private fun App(baseUrl: String, token: String, onExit: () -> Unit) {
     }
 
     fun changeModel(requested: String) {
+        if (busy || commandBusy) {
+            items.add(Item.Note("Wait for the current response to finish before switching models."))
+            return
+        }
         scope.launch {
             val ok = withContext(Dispatchers.IO) {
                 postModel(baseUrl, token, requested)
@@ -649,7 +842,28 @@ private fun App(baseUrl: String, token: String, onExit: () -> Unit) {
         }
     }
 
-    Row(Modifier.fillMaxSize().background(Background)) {
+    when (apiOnline) {
+        null -> HostLoadingScreen()
+        false -> SetupScreen(
+            baseUrl = baseUrl,
+            projectRoot = projectRoot,
+            provider = setupProvider,
+            url = setupUrl,
+            apiKey = setupKey,
+            model = setupModel,
+            models = setupModels,
+            keySet = setupKeySet,
+            busy = setupBusy,
+            message = setupMessage,
+            onProvider = { selectSetupProvider(it) },
+            onUrl = { setupUrl = it },
+            onApiKey = { setupKey = it },
+            onModel = { setupModel = it },
+            onLoadModels = { loadSetupModels() },
+            onStart = { startLocalHost() },
+            onRetry = { retryHost() },
+        )
+        true -> Row(Modifier.fillMaxSize().background(Background)) {
         Sidebar(
             status = status,
             threadId = threadId,
@@ -657,11 +871,13 @@ private fun App(baseUrl: String, token: String, onExit: () -> Unit) {
             tokenReady = token.isNotBlank(),
             model = model,
             models = models,
+            provider = provider,
             totalTokens = totalTokens,
             lastLatency = lastLatency,
             lastTokens = lastTokens,
             runCount = runCount,
             onModelChange = { changeModel(it) },
+            onProviderChange = { openProviderDialog() },
             onNewThread = {
                 threadId = GridAgentClient.newThreadId()
                 items.clear()
@@ -721,6 +937,7 @@ private fun App(baseUrl: String, token: String, onExit: () -> Unit) {
             )
         }
     }
+    }
     if (confirmShutdown) {
         AlertDialog(
             onDismissRequest = { confirmShutdown = false },
@@ -751,6 +968,408 @@ private fun App(baseUrl: String, token: String, onExit: () -> Unit) {
             textContentColor = Muted,
         )
     }
+    if (showProviderDialog) {
+        ProviderDialog(
+            baseUrl = baseUrl,
+            token = token,
+            currentProvider = provider,
+            currentModel = model,
+            currentBaseUrl = providerInfo?.baseUrl ?: providerDefaultUrl(provider),
+            serverProviders = providerInfo?.providers ?: DEFAULT_PROVIDERS,
+            onDismiss = { showProviderDialog = false },
+            onSwitched = { newProvider, newModel, newModels ->
+                provider = newProvider
+                model = newModel
+                models = newModels
+                showProviderDialog = false
+                status = "Provider: ${providerLabel(newProvider)}"
+                items.add(
+                    Item.Note("Switched to ${providerLabel(newProvider)} · $newModel")
+                )
+                scope.launch {
+                    providerInfo = withContext(Dispatchers.IO) {
+                        fetchProviderInfo(baseUrl, token)
+                    }
+                }
+            },
+        )
+    }
+}
+
+@Composable
+private fun HostLoadingScreen() {
+    Box(Modifier.fillMaxSize().background(Background), contentAlignment = Alignment.Center) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            CircularProgressIndicator(
+                modifier = Modifier.size(18.dp),
+                color = GridGreen,
+                strokeWidth = 2.dp,
+            )
+            Spacer(Modifier.width(10.dp))
+            Text("Connecting to GRID host…", color = Muted, fontSize = 13.sp)
+        }
+    }
+}
+
+@Composable
+private fun SetupScreen(
+    baseUrl: String,
+    projectRoot: File?,
+    provider: String,
+    url: String,
+    apiKey: String,
+    model: String,
+    models: List<String>,
+    keySet: Boolean,
+    busy: Boolean,
+    message: String,
+    onProvider: (String) -> Unit,
+    onUrl: (String) -> Unit,
+    onApiKey: (String) -> Unit,
+    onModel: (String) -> Unit,
+    onLoadModels: () -> Unit,
+    onStart: () -> Unit,
+    onRetry: () -> Unit,
+) {
+    Box(
+        Modifier.fillMaxSize().background(Background).padding(24.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Surface(
+            color = Panel,
+            shape = RoundedCornerShape(16.dp),
+            modifier = Modifier.widthIn(max = 620.dp).fillMaxWidth(0.86f),
+        ) {
+            Column(Modifier.padding(24.dp)) {
+                Text("Start GRID", color = Color.White, fontSize = 26.sp, fontWeight = FontWeight.SemiBold)
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    "Choose a provider. GRID writes config.json and starts the local host for you.",
+                    color = Muted,
+                    fontSize = 12.sp,
+                )
+                Spacer(Modifier.height(18.dp))
+                ProviderForm(
+                    providers = DEFAULT_PROVIDERS,
+                    provider = provider,
+                    url = url,
+                    apiKey = apiKey,
+                    keySet = keySet,
+                    model = model,
+                    models = models,
+                    busy = busy,
+                    onProvider = onProvider,
+                    onUrl = onUrl,
+                    onApiKey = onApiKey,
+                    onModel = onModel,
+                    onLoadModels = onLoadModels,
+                )
+                Spacer(Modifier.height(16.dp))
+                Button(
+                    onClick = onStart,
+                    enabled = !busy,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = GridGreen,
+                        contentColor = Color.Black,
+                    ),
+                    modifier = Modifier.fillMaxWidth().height(44.dp),
+                ) {
+                    Text(if (busy) "Working…" else "Start GRID host")
+                }
+                Spacer(Modifier.height(8.dp))
+                OutlinedButton(
+                    onClick = onRetry,
+                    enabled = !busy,
+                    modifier = Modifier.fillMaxWidth(),
+                ) { Text("Connect to a running host") }
+                if (message.isNotBlank()) {
+                    Spacer(Modifier.height(10.dp))
+                    Text(
+                        message,
+                        color = GridGreenDim,
+                        fontSize = 11.sp,
+                        fontFamily = FontFamily.Monospace,
+                    )
+                }
+                Spacer(Modifier.height(10.dp))
+                Text(
+                    "Endpoint: $baseUrl",
+                    color = Muted,
+                    fontSize = 10.sp,
+                    fontFamily = FontFamily.Monospace,
+                )
+                if (projectRoot == null) {
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        "Project root not found. Start the desktop from the GRID folder or pass --root.",
+                        color = Danger,
+                        fontSize = 11.sp,
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ProviderForm(
+    providers: List<ProviderOption>,
+    provider: String,
+    url: String,
+    apiKey: String,
+    keySet: Boolean,
+    model: String,
+    models: List<String>,
+    busy: Boolean,
+    onProvider: (String) -> Unit,
+    onUrl: (String) -> Unit,
+    onApiKey: (String) -> Unit,
+    onModel: (String) -> Unit,
+    onLoadModels: () -> Unit,
+) {
+    var providerMenu by remember { mutableStateOf(false) }
+    var modelMenu by remember { mutableStateOf(false) }
+    val selected = providers.firstOrNull { it.id == provider }
+        ?: providers.firstOrNull()
+        ?: DEFAULT_PROVIDERS.first()
+
+    Text("PROVIDER", color = Muted, fontSize = 10.sp, letterSpacing = 1.5.sp)
+    Spacer(Modifier.height(4.dp))
+    Box {
+        OutlinedButton(
+            onClick = { providerMenu = true },
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Text(
+                selected.name,
+                fontSize = 12.sp,
+                color = if (selected.available) Color.White else Muted,
+            )
+            Spacer(Modifier.weight(1f))
+            Text("▾", color = Muted, fontSize = 12.sp)
+        }
+        DropdownMenu(
+            expanded = providerMenu,
+            onDismissRequest = { providerMenu = false },
+        ) {
+            providers.forEach { option ->
+                DropdownMenuItem(
+                    text = {
+                        Column {
+                            Text(
+                                option.name,
+                                fontSize = 12.sp,
+                                color = if (option.available) Color.White else Muted,
+                            )
+                            Text(
+                                if (option.available) option.description else "Not installed",
+                                fontSize = 10.sp,
+                                color = Muted,
+                            )
+                        }
+                    },
+                    enabled = option.available,
+                    onClick = {
+                        providerMenu = false
+                        onProvider(option.id)
+                    },
+                )
+            }
+        }
+    }
+    Spacer(Modifier.height(10.dp))
+    OutlinedTextField(
+        value = url,
+        onValueChange = onUrl,
+        label = { Text("Base URL") },
+        singleLine = true,
+        modifier = Modifier.fillMaxWidth(),
+    )
+    if (selected.needsKey) {
+        Spacer(Modifier.height(10.dp))
+        OutlinedTextField(
+            value = apiKey,
+            onValueChange = onApiKey,
+            label = { Text("API key") },
+            placeholder = {
+                Text(if (keySet) "Saved — leave blank to keep" else "Required", color = Muted)
+            },
+            singleLine = true,
+            visualTransformation = PasswordVisualTransformation(),
+            modifier = Modifier.fillMaxWidth(),
+        )
+    }
+    Spacer(Modifier.height(10.dp))
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        OutlinedTextField(
+            value = model,
+            onValueChange = onModel,
+            label = { Text("Model") },
+            singleLine = true,
+            modifier = Modifier.weight(1f),
+        )
+        Spacer(Modifier.width(8.dp))
+        OutlinedButton(onClick = onLoadModels, enabled = !busy) {
+            Text(if (busy) "…" else "Load", fontSize = 11.sp)
+        }
+    }
+    if (models.isNotEmpty()) {
+        Spacer(Modifier.height(6.dp))
+        Box {
+            OutlinedButton(
+                onClick = { modelMenu = true },
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text("Choose from ${models.size} models", fontSize = 11.sp)
+                Spacer(Modifier.weight(1f))
+                Text("▾", color = Muted, fontSize = 11.sp)
+            }
+            DropdownMenu(
+                expanded = modelMenu,
+                onDismissRequest = { modelMenu = false },
+            ) {
+                models.take(120).forEach { candidate ->
+                    DropdownMenuItem(
+                        text = { Text(candidate, fontSize = 11.sp) },
+                        onClick = {
+                            onModel(candidate)
+                            modelMenu = false
+                        },
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ProviderDialog(
+    baseUrl: String,
+    token: String,
+    currentProvider: String,
+    currentModel: String,
+    currentBaseUrl: String,
+    serverProviders: List<ProviderOption>,
+    onDismiss: () -> Unit,
+    onSwitched: (String, String, List<String>) -> Unit,
+) {
+    val scope = rememberCoroutineScope()
+    var provider by remember {
+        mutableStateOf(currentProvider.ifBlank { "ollama" })
+    }
+    var url by remember {
+        mutableStateOf(currentBaseUrl.ifBlank { providerDefaultUrl(provider) })
+    }
+    var apiKey by remember { mutableStateOf("") }
+    var keySet by remember {
+        mutableStateOf(serverProviders.firstOrNull { it.id == provider }?.keySet ?: false)
+    }
+    var model by remember { mutableStateOf(currentModel) }
+    var models by remember { mutableStateOf(emptyList<String>()) }
+    var busy by remember { mutableStateOf(false) }
+    var message by remember { mutableStateOf("") }
+
+    fun selectProvider(id: String) {
+        if (provider != id) model = ""
+        provider = id
+        if (url.isBlank() || DEFAULT_PROVIDERS.any { it.defaultUrl == url }) {
+            url = providerDefaultUrl(id)
+        }
+        apiKey = ""
+        keySet = serverProviders.firstOrNull { it.id == id }?.keySet ?: false
+        models = emptyList()
+    }
+
+    fun loadModels() {
+        if (busy) return
+        busy = true
+        message = "Loading models..."
+        scope.launch {
+            try {
+                val list = withContext(Dispatchers.IO) {
+                    postProviderModels(baseUrl, token, provider, url, apiKey)
+                }
+                models = list
+                if (model.isBlank() && list.isNotEmpty()) model = list.first()
+                message = if (list.isEmpty()) {
+                    "No models found. Check the URL and API key."
+                } else {
+                    "${list.size} models loaded."
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                message = error.message ?: "Could not load models."
+            } finally {
+                busy = false
+            }
+        }
+    }
+
+    fun switchProvider() {
+        if (busy) return
+        if (model.isBlank()) {
+            message = "Model is required."
+            return
+        }
+        busy = true
+        message = "Switching provider..."
+        scope.launch {
+            try {
+                withContext(Dispatchers.IO) {
+                    postProvider(baseUrl, token, provider, url, model, apiKey)
+                }
+                val list = models.ifEmpty { listOf(model) }
+                onSwitched(provider, model, list)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                message = error.message ?: "Provider switch failed."
+                busy = false
+            }
+        }
+    }
+
+    AlertDialog(
+        onDismissRequest = { if (!busy) onDismiss() },
+        title = { Text("Change provider") },
+        text = {
+            Column {
+                ProviderForm(
+                    providers = serverProviders,
+                    provider = provider,
+                    url = url,
+                    apiKey = apiKey,
+                    keySet = keySet,
+                    model = model,
+                    models = models,
+                    busy = busy,
+                    onProvider = { selectProvider(it) },
+                    onUrl = { url = it },
+                    onApiKey = { apiKey = it },
+                    onModel = { model = it },
+                    onLoadModels = { loadModels() },
+                )
+                if (message.isNotBlank()) {
+                    Spacer(Modifier.height(8.dp))
+                    Text(message, color = Muted, fontSize = 10.sp, fontFamily = FontFamily.Monospace)
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = { switchProvider() }, enabled = !busy) {
+                Text("Switch", color = GridGreen)
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss, enabled = !busy) {
+                Text("Cancel", color = Muted)
+            }
+        },
+        containerColor = PanelRaised,
+        titleContentColor = Color.White,
+        textContentColor = Muted,
+    )
 }
 
 @Composable
@@ -761,11 +1380,13 @@ private fun Sidebar(
     tokenReady: Boolean,
     model: String,
     models: List<String>,
+    provider: String,
     totalTokens: Int,
     lastLatency: Long,
     lastTokens: Int,
     runCount: Int,
     onModelChange: (String) -> Unit,
+    onProviderChange: () -> Unit,
     onNewThread: () -> Unit,
     onQuickPrompt: (String) -> Unit,
 ) {
@@ -775,6 +1396,7 @@ private fun Sidebar(
             .width(250.dp)
             .fillMaxHeight()
             .background(Panel)
+            .verticalScroll(rememberScrollState())
             .padding(16.dp)
     ) {
         Text("GRID", color = GridGreen, fontSize = 30.sp, fontWeight = FontWeight.Bold)
@@ -797,6 +1419,21 @@ private fun Sidebar(
         Spacer(Modifier.height(14.dp))
         Text("ENDPOINT", color = Muted, fontSize = 10.sp, letterSpacing = 1.5.sp)
         Text(baseUrl, color = GridGreenDim, fontSize = 11.sp, fontFamily = FontFamily.Monospace)
+        Spacer(Modifier.height(12.dp))
+        Text("PROVIDER", color = Muted, fontSize = 10.sp, letterSpacing = 1.5.sp)
+        Text(
+            providerLabel(provider),
+            color = GridGreenDim,
+            fontSize = 11.sp,
+            fontFamily = FontFamily.Monospace,
+            maxLines = 1,
+        )
+        Box {
+            OutlinedButton(
+                onClick = onProviderChange,
+                modifier = Modifier.fillMaxWidth(),
+            ) { Text("Change provider", fontSize = 11.sp) }
+        }
         Spacer(Modifier.height(12.dp))
         Text("MODEL", color = Muted, fontSize = 10.sp, letterSpacing = 1.5.sp)
         Text(
@@ -1419,6 +2056,63 @@ private fun Composer(
     }
 }
 
+private data class ProviderOption(
+    val id: String,
+    val name: String,
+    val description: String,
+    val defaultUrl: String,
+    val needsKey: Boolean,
+    val available: Boolean = true,
+    val keySet: Boolean = false,
+)
+
+private val DEFAULT_PROVIDERS = listOf(
+    ProviderOption(
+        "ollama",
+        "Ollama",
+        "Local models on this machine",
+        "http://localhost:11434",
+        needsKey = false,
+    ),
+    ProviderOption(
+        "lm_studio",
+        "LM Studio",
+        "Local OpenAI-compatible server",
+        "http://localhost:1234/v1",
+        needsKey = false,
+    ),
+    ProviderOption(
+        "openrouter",
+        "OpenRouter",
+        "Cloud models via openrouter.ai",
+        "https://openrouter.ai/api/v1",
+        needsKey = true,
+    ),
+    ProviderOption(
+        "openai",
+        "OpenAI",
+        "OpenAI or OpenAI-compatible API",
+        "https://api.openai.com/v1",
+        needsKey = true,
+    ),
+)
+
+private data class ProviderInfo(
+    val provider: String,
+    val model: String,
+    val baseUrl: String,
+    val providers: List<ProviderOption>,
+)
+
+private fun providerLabel(id: String): String =
+    DEFAULT_PROVIDERS.firstOrNull { it.id == id }?.name ?: id.ifBlank { "unknown" }
+
+private fun providerDefaultUrl(id: String): String =
+    DEFAULT_PROVIDERS.firstOrNull { it.id == id }?.defaultUrl ?: ""
+
+private fun providerNeedsKey(id: String): Boolean =
+    DEFAULT_PROVIDERS.firstOrNull { it.id == id }?.needsKey ?: false
+
 private data class ModelInfo(val model: String, val models: List<String>)
 
 private data class ToolInfo(val name: String, val description: String)
@@ -1451,6 +2145,263 @@ private fun fetchTools(baseUrl: String, token: String): List<ToolInfo>? {
     } catch (_: Exception) {
         null
     }
+}
+
+private fun fetchProviderInfo(baseUrl: String, token: String): ProviderInfo? {
+    return try {
+        val connection = URI.create("$baseUrl/api/v1/provider").toURL().openConnection() as HttpURLConnection
+        connection.requestMethod = "GET"
+        connection.setRequestProperty("Authorization", "Bearer $token")
+        connection.connectTimeout = 3000
+        connection.readTimeout = 10000
+        try {
+            if (connection.responseCode != 200) {
+                null
+            } else {
+                val root = Json
+                    .parseToJsonElement(connection.inputStream.bufferedReader().readText())
+                    .jsonObject
+                val providers = root["providers"]?.jsonArray?.mapNotNull { element ->
+                    val item = element.jsonObject
+                    val id = item["id"]?.jsonPrimitive?.contentOrNull
+                        ?: return@mapNotNull null
+                    ProviderOption(
+                        id = id,
+                        name = item["name"]?.jsonPrimitive?.contentOrNull ?: id,
+                        description = item["description"]?.jsonPrimitive?.contentOrNull ?: "",
+                        defaultUrl = item["default_url"]?.jsonPrimitive?.contentOrNull
+                            ?: providerDefaultUrl(id),
+                        needsKey = item["needs_key"]?.jsonPrimitive?.booleanOrNull ?: false,
+                        available = item["available"]?.jsonPrimitive?.booleanOrNull ?: true,
+                        keySet = item["key_set"]?.jsonPrimitive?.booleanOrNull ?: false,
+                    )
+                } ?: DEFAULT_PROVIDERS
+                ProviderInfo(
+                    provider = root["provider"]?.jsonPrimitive?.contentOrNull ?: "",
+                    model = root["model"]?.jsonPrimitive?.contentOrNull ?: "",
+                    baseUrl = root["base_url"]?.jsonPrimitive?.contentOrNull ?: "",
+                    providers = providers,
+                )
+            }
+        } finally {
+            connection.disconnect()
+        }
+    } catch (_: Exception) {
+        null
+    }
+}
+
+private fun postProviderModels(
+    baseUrl: String,
+    token: String,
+    provider: String,
+    providerUrl: String,
+    apiKey: String,
+): List<String> {
+    val connection = URI.create("$baseUrl/api/v1/provider/models").toURL().openConnection() as HttpURLConnection
+    connection.requestMethod = "POST"
+    connection.doOutput = true
+    connection.setRequestProperty("Authorization", "Bearer $token")
+    connection.setRequestProperty("Content-Type", "application/json")
+    connection.connectTimeout = 5000
+    connection.readTimeout = 30000
+    return try {
+        val payload = buildJsonObject {
+            put("provider", provider)
+            put("base_url", providerUrl)
+            if (apiKey.isNotBlank()) put("api_key", apiKey)
+        }.toString()
+        connection.outputStream.use { it.write(payload.toByteArray(Charsets.UTF_8)) }
+        val code = connection.responseCode
+        val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+        val text = stream?.bufferedReader()?.use { it.readText() }.orEmpty()
+        val root = Json.parseToJsonElement(text.ifBlank { "{}" }).jsonObject
+        if (code !in 200..299) {
+            throw IllegalStateException(
+                root["error"]?.jsonPrimitive?.contentOrNull ?: "Could not load models (HTTP $code)"
+            )
+        }
+        root["models"]?.jsonArray
+            ?.mapNotNull { it.jsonPrimitive.contentOrNull }
+            ?: emptyList()
+    } finally {
+        connection.disconnect()
+    }
+}
+
+private fun postProvider(
+    baseUrl: String,
+    token: String,
+    provider: String,
+    providerUrl: String,
+    model: String,
+    apiKey: String,
+): String {
+    val connection = URI.create("$baseUrl/api/v1/provider").toURL().openConnection() as HttpURLConnection
+    connection.requestMethod = "POST"
+    connection.doOutput = true
+    connection.setRequestProperty("Authorization", "Bearer $token")
+    connection.setRequestProperty("Content-Type", "application/json")
+    connection.connectTimeout = 5000
+    connection.readTimeout = 30000
+    try {
+        val payload = buildJsonObject {
+            put("provider", provider)
+            put("base_url", providerUrl)
+            put("model", model)
+            if (apiKey.isNotBlank()) put("api_key", apiKey)
+        }.toString()
+        connection.outputStream.use { it.write(payload.toByteArray(Charsets.UTF_8)) }
+        val code = connection.responseCode
+        val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+        val text = stream?.bufferedReader()?.use { it.readText() }.orEmpty()
+        val root = Json.parseToJsonElement(text.ifBlank { "{}" }).jsonObject
+        if (code in 200..299) {
+            return root["message"]?.jsonPrimitive?.contentOrNull
+                ?: "Switched to ${providerLabel(provider)} · $model"
+        }
+        throw IllegalStateException(
+            root["error"]?.jsonPrimitive?.contentOrNull ?: "Provider switch failed (HTTP $code)"
+        )
+    } finally {
+        connection.disconnect()
+    }
+}
+
+private fun fetchModelsDirect(
+    provider: String,
+    providerUrl: String,
+    apiKey: String,
+): List<String> {
+    val base = providerUrl.trim().trimEnd('/').let {
+        if (provider == "ollama") it.removeSuffix("/v1") else it
+    }
+    if (base.isBlank()) return emptyList()
+    if (provider == "ollama") {
+        val root = Json
+            .parseToJsonElement(httpGet("$base/api/tags", null))
+            .jsonObject
+        return root["models"]?.jsonArray?.mapNotNull {
+            it.jsonObject["name"]?.jsonPrimitive?.contentOrNull
+        } ?: emptyList()
+    }
+    if (providerNeedsKey(provider) && apiKey.isBlank()) {
+        throw IllegalStateException("${providerLabel(provider)} API key is required.")
+    }
+    val root = Json
+        .parseToJsonElement(httpGet("$base/models", apiKey.ifBlank { null }))
+        .jsonObject
+    return root["data"]?.jsonArray?.mapNotNull {
+        it.jsonObject["id"]?.jsonPrimitive?.contentOrNull
+    } ?: emptyList()
+}
+
+private fun httpGet(url: String, apiKey: String?): String {
+    val connection = URI.create(url).toURL().openConnection() as HttpURLConnection
+    connection.requestMethod = "GET"
+    connection.connectTimeout = 5000
+    connection.readTimeout = 15000
+    if (!apiKey.isNullOrBlank()) {
+        connection.setRequestProperty("Authorization", "Bearer $apiKey")
+    }
+    try {
+        val code = connection.responseCode
+        val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+        val text = stream?.bufferedReader()?.use { it.readText() }.orEmpty()
+        if (code !in 200..299) {
+            throw IllegalStateException("HTTP $code from $url")
+        }
+        return text
+    } finally {
+        connection.disconnect()
+    }
+}
+
+private fun findProjectRoot(): File? {
+    var directory: File? = File(System.getProperty("user.dir")).absoluteFile
+    repeat(5) {
+        val current = directory ?: return null
+        if (File(current, "grid_agent.py").isFile) return current
+        directory = current.parentFile
+    }
+    return null
+}
+
+private fun pythonExecutable(root: File): String {
+    val windows = File(root, ".venv/Scripts/python.exe")
+    if (windows.isFile) return windows.absolutePath
+    val unix = File(root, ".venv/bin/python")
+    if (unix.isFile) return unix.absolutePath
+    return if (System.getProperty("os.name").lowercase().contains("win")) "python" else "python3"
+}
+
+private fun readToken(root: File): String {
+    return try {
+        val file = File(root, "run/api_token")
+        if (file.isFile) file.readText().trim() else ""
+    } catch (_: Exception) {
+        ""
+    }
+}
+
+private fun startHost(root: File) {
+    val log = File(root, "run/desktop_host.log")
+    log.parentFile?.mkdirs()
+    val builder = ProcessBuilder(
+        pythonExecutable(root),
+        "grid_agent.py",
+        "--api",
+        "--no-input",
+        "--no-banner",
+    )
+        .directory(root)
+        .redirectErrorStream(true)
+        .redirectOutput(ProcessBuilder.Redirect.appendTo(log))
+    builder.environment()["PYTHONUNBUFFERED"] = "1"
+    builder.start()
+}
+
+private fun readConfig(root: File): Map<String, kotlinx.serialization.json.JsonElement> {
+    return try {
+        val file = File(root, "config.json")
+        if (!file.isFile) emptyMap()
+        else Json.parseToJsonElement(file.readText()).jsonObject
+    } catch (_: Exception) {
+        emptyMap()
+    }
+}
+
+private fun hasProviderKey(root: File, provider: String): Boolean {
+    val cfg = readConfig(root)
+    return when (provider) {
+        "openrouter" -> !cfg["openrouter_api_key"]?.jsonPrimitive?.contentOrNull.isNullOrBlank()
+        "openai" -> !cfg["openai_api_key"]?.jsonPrimitive?.contentOrNull.isNullOrBlank()
+        else -> true
+    }
+}
+
+private fun writeConfig(
+    root: File,
+    provider: String,
+    providerUrl: String,
+    model: String,
+    apiKey: String,
+) {
+    val existing = readConfig(root).toMutableMap()
+    existing["backend_type"] = JsonPrimitive(provider)
+    existing["base_url"] = JsonPrimitive(providerUrl.trimEnd('/'))
+    existing["model"] = JsonPrimitive(model)
+    if (apiKey.isNotBlank()) {
+        when (provider) {
+            "openrouter" -> existing["openrouter_api_key"] = JsonPrimitive(apiKey)
+            "openai" -> existing["openai_api_key"] = JsonPrimitive(apiKey)
+        }
+    }
+    val file = File(root, "config.json")
+    file.writeText(
+        Json { prettyPrint = true }
+            .encodeToString(JsonObject.serializer(), JsonObject(existing))
+    )
 }
 
 private fun fetchModelInfo(baseUrl: String, token: String): ModelInfo? {

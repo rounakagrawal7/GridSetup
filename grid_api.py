@@ -43,6 +43,41 @@ MAX_REPORT_BYTES = 2_000_000
 APPROVAL_TIMEOUT_SECONDS = 300
 ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$")
 
+PROVIDERS = (
+    {
+        "id": "ollama",
+        "name": "Ollama",
+        "description": "Local models on this machine",
+        "default_url": "http://localhost:11434",
+        "needs_key": False,
+        "package": "ollama",
+    },
+    {
+        "id": "lm_studio",
+        "name": "LM Studio",
+        "description": "Local OpenAI-compatible server",
+        "default_url": "http://localhost:1234/v1",
+        "needs_key": False,
+        "package": "openai",
+    },
+    {
+        "id": "openrouter",
+        "name": "OpenRouter",
+        "description": "Cloud models via openrouter.ai",
+        "default_url": "https://openrouter.ai/api/v1",
+        "needs_key": True,
+        "package": "openai",
+    },
+    {
+        "id": "openai",
+        "name": "OpenAI",
+        "description": "OpenAI or OpenAI-compatible API",
+        "default_url": "https://api.openai.com/v1",
+        "needs_key": True,
+        "package": "openai",
+    },
+)
+
 
 def _now() -> str:
     return datetime.now().isoformat(timespec="seconds")
@@ -275,6 +310,153 @@ class GridAPIServer:
             "model": model,
             "backend": backend_type,
             "models": models,
+        }
+
+    def _provider_info(self) -> Dict[str, Any]:
+        backend = getattr(self.orchestrator, "backend", None)
+        loader = getattr(self.runtime, "load_config", None)
+        cfg: Dict[str, Any] = {}
+        if callable(loader):
+            try:
+                cfg = loader()
+            except Exception:
+                cfg = {}
+        rows = []
+        for provider in PROVIDERS:
+            row = {key: value for key, value in provider.items() if key != "package"}
+            package = provider["package"]
+            flag = "HAS_OLLAMA" if package == "ollama" else "HAS_OPENAI"
+            row["available"] = bool(getattr(self.runtime, flag, False))
+            if provider["id"] == "openrouter":
+                row["key_set"] = bool(cfg.get("openrouter_api_key"))
+            elif provider["id"] == "openai":
+                row["key_set"] = bool(cfg.get("openai_api_key"))
+            else:
+                row["key_set"] = True
+            rows.append(row)
+        return {
+            "ok": True,
+            "provider": getattr(backend, "type", ""),
+            "model": getattr(backend, "model", ""),
+            "base_url": getattr(backend, "base_url", ""),
+            "providers": rows,
+        }
+
+    def _provider_models(self, body: Dict[str, Any]) -> Tuple[int, Dict[str, Any]]:
+        provider = str(body.get("provider") or "").strip().lower()
+        info = next((row for row in PROVIDERS if row["id"] == provider), None)
+        if info is None:
+            return 400, {"ok": False, "error": f"unknown provider: {provider}"}
+        flag = "HAS_OLLAMA" if info["package"] == "ollama" else "HAS_OPENAI"
+        if not bool(getattr(self.runtime, flag, False)):
+            return 400, {
+                "ok": False,
+                "error": f"{info['name']} needs the '{info['package']}' package",
+            }
+        base_url = str(body.get("base_url") or info["default_url"]).rstrip("/")
+        api_key = str(body.get("api_key") or "").strip()
+        loader = getattr(self.runtime, "load_config", None)
+        cfg = loader() if callable(loader) else {}
+        key_name = {
+            "openrouter": "openrouter_api_key",
+            "openai": "openai_api_key",
+        }.get(provider, "")
+        if key_name and not api_key and not cfg.get(key_name):
+            return 400, {
+                "ok": False,
+                "error": f"{info['name']} API key is required",
+            }
+        if key_name and api_key:
+            save = getattr(self.runtime, "save_config", None)
+            if callable(save):
+                try:
+                    save({key_name: api_key})
+                except Exception:
+                    pass
+        backend_cls = getattr(self.runtime, "LLMBackend", None)
+        if backend_cls is None:
+            return 500, {"ok": False, "error": "LLM backend is unavailable"}
+        try:
+            models = list(backend_cls.fetch_models(provider, base_url) or [])
+        except Exception as exc:
+            return 500, {"ok": False, "error": f"could not fetch models: {exc}"}
+        return 200, {
+            "ok": True,
+            "provider": provider,
+            "base_url": base_url,
+            "models": models,
+        }
+
+    def _set_provider(self, body: Dict[str, Any]) -> Tuple[int, Dict[str, Any]]:
+        provider = str(body.get("provider") or "").strip().lower()
+        info = next((row for row in PROVIDERS if row["id"] == provider), None)
+        if info is None:
+            return 400, {"ok": False, "error": f"unknown provider: {provider}"}
+        flag = "HAS_OLLAMA" if info["package"] == "ollama" else "HAS_OPENAI"
+        if not bool(getattr(self.runtime, flag, False)):
+            return 400, {
+                "ok": False,
+                "error": f"{info['name']} needs the '{info['package']}' package",
+            }
+        model = str(body.get("model") or "").strip()
+        if not model:
+            return 400, {"ok": False, "error": "model is required"}
+        base_url = str(body.get("base_url") or info["default_url"]).rstrip("/")
+        api_key = str(body.get("api_key") or "").strip()
+        loader = getattr(self.runtime, "load_config", None)
+        cfg = loader() if callable(loader) else {}
+        key_name = {
+            "openrouter": "openrouter_api_key",
+            "openai": "openai_api_key",
+        }.get(provider, "")
+        key_update: Dict[str, Any] = {}
+        if key_name:
+            if api_key:
+                key_update[key_name] = api_key
+            elif not cfg.get(key_name):
+                return 400, {
+                    "ok": False,
+                    "error": f"{info['name']} API key is required",
+                }
+        save = getattr(self.runtime, "save_config", None)
+        if key_update and callable(save):
+            try:
+                save(key_update)
+            except Exception:
+                pass
+        backend_cls = getattr(self.runtime, "LLMBackend", None)
+        if backend_cls is None:
+            return 500, {"ok": False, "error": "LLM backend is unavailable"}
+        try:
+            backend = backend_cls(provider, model, base_url)
+        except SystemExit:
+            return 400, {"ok": False, "error": f"could not initialize {info['name']}"}
+        except Exception as exc:
+            return 500, {"ok": False, "error": f"could not initialize provider: {exc}"}
+        self.orchestrator.backend = backend
+        recaller = getattr(self.orchestrator, "recaller", None)
+        if recaller is not None:
+            try:
+                recaller.backend = backend
+            except Exception:
+                pass
+        updates: Dict[str, Any] = {
+            "backend_type": provider,
+            "base_url": base_url,
+            "model": model,
+        }
+        updates.update(key_update)
+        if callable(save):
+            try:
+                save(updates)
+            except Exception:
+                pass
+        return 200, {
+            "ok": True,
+            "provider": provider,
+            "model": model,
+            "base_url": base_url,
+            "message": f"Switched to {info['name']} · {model}",
         }
 
     def _set_model(self, body: Dict[str, Any]) -> Tuple[int, Dict[str, Any]]:
@@ -1007,6 +1189,8 @@ class GridAPIServer:
                     server._json(self, 200, server._payload())
                 elif path == "/api/v1/model":
                     server._json(self, 200, server._model_info())
+                elif path == "/api/v1/provider":
+                    server._json(self, 200, server._provider_info())
                 elif path == "/api/v1/tools":
                     server._json(self, 200, server._tools_info())
                 elif path == "/api/v1/threads":
@@ -1068,6 +1252,14 @@ class GridAPIServer:
                     code, payload = server._set_model(self._read_json())
                     server._json(self, code, payload)
                     return
+                if path == "/api/v1/provider":
+                    code, payload = server._set_provider(self._read_json())
+                    server._json(self, code, payload)
+                    return
+                if path == "/api/v1/provider/models":
+                    code, payload = server._provider_models(self._read_json())
+                    server._json(self, code, payload)
+                    return
                 if path == "/api/v1/command":
                     body = self._read_json()
                     code, payload = server._local_command(body.get("command", ""))
@@ -1081,7 +1273,6 @@ class GridAPIServer:
                             self.wfile.flush()
                         except OSError:
                             pass
-                        time.sleep(0.35)
                         server.shutdown_event.set()
                     return
                 if path.startswith("/api/v1/approvals/"):

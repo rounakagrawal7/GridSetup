@@ -1,6 +1,6 @@
 """
 GRID v3 — System Manager Agent
-Ollama, LM Studio & OpenRouter backends. Web, network, system tools, streaming, planner, config, export.
+Ollama, LM Studio, OpenRouter & OpenAI backends. Web, network, system tools, streaming, planner, config, export.
 """
 
 import argparse
@@ -307,24 +307,40 @@ class LLMBackend:
             self.last_usage["output"] += int(output_tokens)
 
     def _init_client(self):
-        if self.type in ("lm_studio", "openrouter"):
+        if self.type in ("lm_studio", "openrouter", "openai"):
             if not HAS_OPENAI:
                 console.print("[red][x] 'openai' package required. Install: pip install openai[/red]")
                 sys.exit(1)
+            cfg = load_config()
+            key_name = ""
+            label = "OpenAI-compatible"
+            key_url = ""
             if self.type == "openrouter":
-                cfg = load_config()
-                api_key = cfg.get("openrouter_api_key", "")
+                key_name = "openrouter_api_key"
+                label = "OpenRouter"
+                key_url = "https://openrouter.ai/keys"
+            elif self.type == "openai":
+                key_name = "openai_api_key"
+                label = "OpenAI"
+                key_url = "https://platform.openai.com/api-keys"
+            if key_name:
+                api_key = cfg.get(key_name, "")
                 if not api_key:
-                    api_key = Prompt.ask("  [bold yellow]Enter your OpenRouter API key[/]", default="")
+                    api_key = Prompt.ask(
+                        f"  [bold yellow]Enter your {label} API key[/]", default=""
+                    )
                     if api_key:
-                        cfg["openrouter_api_key"] = api_key
+                        cfg[key_name] = api_key
                         save_config(cfg)
                     else:
-                        console.print("[red][x] OpenRouter requires an API key. Get one at https://openrouter.ai/keys[/red]")
+                        console.print(
+                            f"[red][x] {label} requires an API key. "
+                            f"Get one at {key_url}[/red]"
+                        )
                         sys.exit(1)
-                self._client = OpenAI(base_url=self.base_url, api_key=api_key)
             else:
-                self._client = OpenAI(base_url=self.base_url, api_key="lm-studio")
+                api_key = "lm-studio"
+            self._client = OpenAI(base_url=self.base_url, api_key=api_key)
         else:
             if not HAS_OLLAMA:
                 console.print("[red][x] 'ollama' package required. Install: pip install ollama[/red]")
@@ -339,7 +355,7 @@ class LLMBackend:
     def chat(self, messages: List[Dict], temperature: float = 0.7) -> str:
         messages = compress_messages(messages, self.model, self.compress_context)
         try:
-            if self.type in ("lm_studio", "openrouter"):
+            if self.type in ("lm_studio", "openrouter", "openai"):
                 resp = self._client.chat.completions.create(
                     model=self.model, messages=messages, temperature=temperature,
                 )
@@ -369,7 +385,7 @@ class LLMBackend:
 
         def _run():
             try:
-                if self.type in ("lm_studio", "openrouter"):
+                if self.type in ("lm_studio", "openrouter", "openai"):
                     stream = self._client.chat.completions.create(
                         model=self.model, messages=messages, temperature=temperature,
                         stream=True,
@@ -422,14 +438,16 @@ class LLMBackend:
     @staticmethod
     def fetch_models(backend_type: str, base_url: str) -> List[str]:
         models = []
-        if backend_type in ("lm_studio", "openrouter"):
+        if backend_type in ("lm_studio", "openrouter", "openai"):
             if not HAS_OPENAI:
                 return []
             try:
                 ak = "lm-studio"
+                cfg = load_config()
                 if backend_type == "openrouter":
-                    cfg = load_config()
                     ak = cfg.get("openrouter_api_key", "")
+                elif backend_type == "openai":
+                    ak = cfg.get("openai_api_key", "")
                 client = OpenAI(base_url=base_url, api_key=ak)
                 for m in client.models.list():
                     models.append(m.id)
@@ -528,9 +546,33 @@ def ensure_server(backend_type: str) -> str:
             except Exception:
                 console.print(f"  [yellow][!] Could not verify OpenRouter connection. You can still try.[/]")
         return base_url
-    else:
+    elif backend_type == "openai":
+        base_url = "https://api.openai.com/v1"
+        console.print(f"  [{M}][+][/] Using [bold]OpenAI[/] at {base_url}")
+        if HAS_OPENAI:
+            cfg = load_config()
+            ak = cfg.get("openai_api_key", "")
+            while not ak:
+                ak = Prompt.ask(f"  [bold yellow]Enter your OpenAI API key[/]").strip()
+                if ak:
+                    cfg["openai_api_key"] = ak
+                    save_config(cfg)
+                    console.print(f"  [{M}][+] API key saved.[/]")
+                else:
+                    console.print(f"  [red][!] API key is required for OpenAI. Get one at https://platform.openai.com/api-keys[/]")
+            try:
+                test = OpenAI(base_url=base_url, api_key=ak)
+                test.models.list()
+                console.print(f"  [{M}][+][/] OpenAI API key valid.[/]")
+            except Exception:
+                console.print(f"  [yellow][!] Could not verify OpenAI connection. You can still try.[/]")
+        return base_url
+    elif backend_type == "lm_studio":
         host, port = "127.0.0.1", LMSTUDIO_PORT
         base_url = f"http://localhost:{port}/v1"
+    else:
+        console.print(f"  [red][x] Unknown backend: {backend_type}[/]")
+        return ""
 
     if _port_open(host, port):
         console.print(f"  [{M}][+][/] Server is [{M}]running[/] at {base_url}")
@@ -5186,6 +5228,7 @@ def _choose_backend_from_config(cfg: dict) -> LLMBackend:
         "ollama": "http://localhost:11434",
         "lm_studio": "http://localhost:1234/v1",
         "openrouter": "https://openrouter.ai/api/v1",
+        "openai": "https://api.openai.com/v1",
     }
     base_url = (cfg.get("base_url") or defaults.get(backend_type, "")).rstrip("/")
     model = (cfg.get("model") or "").strip()
@@ -5193,7 +5236,7 @@ def _choose_backend_from_config(cfg: dict) -> LLMBackend:
     if backend_type == "ollama" and not HAS_OLLAMA:
         console.print("[red][x] Ollama selected, but the 'ollama' package is missing: pip install ollama[/red]")
         sys.exit(2)
-    if backend_type in ("lm_studio", "openrouter") and not HAS_OPENAI:
+    if backend_type in ("lm_studio", "openrouter", "openai") and not HAS_OPENAI:
         console.print("[red][x] OpenAI-compatible backend selected, but the 'openai' package is missing: pip install openai[/red]")
         sys.exit(2)
     if not model:
@@ -5212,6 +5255,10 @@ def _choose_backend_from_config(cfg: dict) -> LLMBackend:
     elif backend_type == "openrouter":
         if not cfg.get("openrouter_api_key"):
             console.print("[red][x] OpenRouter selected, but no openrouter_api_key in config.json.[/red]")
+            sys.exit(2)
+    elif backend_type == "openai":
+        if not cfg.get("openai_api_key"):
+            console.print("[red][x] OpenAI selected, but no openai_api_key in config.json.[/red]")
             sys.exit(2)
     elif backend_type == "lm_studio":
         if not _port_open("127.0.0.1", LMSTUDIO_PORT):
@@ -5244,6 +5291,7 @@ def choose_backend(non_interactive: bool = False) -> LLMBackend:
     if HAS_OPENAI:
         backends.append(("lm_studio", "LM Studio", "OpenAI-compatible server (default port 1234)"))
         backends.append(("openrouter", "OpenRouter", "Cloud LLM API (openrouter.ai)"))
+        backends.append(("openai", "OpenAI", "OpenAI API (platform.openai.com)"))
 
     if not backends:
         console.print(f"[{M_DIM}]No LLM backends available.\nInstall 'ollama' (pip install ollama) or 'openai' (pip install openai).[/]")
@@ -5283,6 +5331,7 @@ def choose_backend(non_interactive: bool = False) -> LLMBackend:
         default_hint = saved_url or {
             "ollama": "http://localhost:11434",
             "openrouter": "https://openrouter.ai/api/v1",
+            "openai": "https://api.openai.com/v1",
         }.get(choice_key, "http://localhost:1234/v1")
         base_url = Prompt.ask(f"  [{M}]Enter server URL[/]", default=default_hint)
 
@@ -5698,6 +5747,9 @@ def run_checks(args) -> int:
     elif backend_type == "openrouter":
         key = cfg.get("openrouter_api_key", "")
         add("OpenRouter key", bool(key), "set" if key else "missing")
+    elif backend_type == "openai":
+        key = cfg.get("openai_api_key", "")
+        add("OpenAI key", bool(key), "set" if key else "missing")
     elif backend_type == "lm_studio":
         add("LM Studio reachable", _port_open("127.0.0.1", LMSTUDIO_PORT), base_url)
     else:
