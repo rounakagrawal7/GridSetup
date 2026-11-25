@@ -166,6 +166,20 @@ class APITestCase(unittest.TestCase):
         )
         self.assertEqual(plain.status_code, 400)
 
+    def test_shutdown_endpoint_saves_and_signals(self):
+        runtime = self.server.runtime
+        old = getattr(runtime, "EXPLICIT_SHUTDOWN", False)
+        self.addCleanup(setattr, runtime, "EXPLICIT_SHUTDOWN", old)
+        response = requests.post(
+            f"{self.base}/shutdown", headers=self.headers, timeout=5
+        )
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertTrue(payload["ok"])
+        self.assertIn("shutting down", payload["message"])
+        self.assertTrue(self.server.shutdown_event.wait(2))
+        self.assertTrue(getattr(runtime, "EXPLICIT_SHUTDOWN", False))
+
     def test_model_info_and_switch(self):
         info = requests.get(f"{self.base}/model", headers=self.headers).json()
         self.assertEqual(info["model"], "fake-model")

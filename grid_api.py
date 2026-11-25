@@ -239,6 +239,7 @@ class GridAPIServer:
         self._thread = None
         self._approvals_lock = threading.Lock()
         self._approvals: Dict[str, Dict[str, Any]] = {}
+        self.shutdown_event = threading.Event()
 
     # ── handlers ─────────────────────────────────────────────
 
@@ -576,6 +577,18 @@ class GridAPIServer:
             except Exception as exc:
                 message += f" PocketBase sync failed: {exc}"
         return message
+
+    def _shutdown_host(self) -> Tuple[int, Dict[str, Any]]:
+        try:
+            message = self._cmd_save("")
+        except Exception as exc:
+            message = f"Memory save failed: {exc}"
+        setattr(self.runtime, "EXPLICIT_SHUTDOWN", True)
+        return 200, {
+            "ok": True,
+            "message": f"{message} GRID host is shutting down.",
+            "saved": not message.startswith("Memory save failed"),
+        }
 
     def _cmd_export(self, args: str) -> str:
         tools = getattr(self.runtime, "Tools", None)
@@ -1060,6 +1073,17 @@ class GridAPIServer:
                     code, payload = server._local_command(body.get("command", ""))
                     server._json(self, code, payload)
                     return
+                if path == "/api/v1/shutdown":
+                    code, payload = server._shutdown_host()
+                    server._json(self, code, payload)
+                    if code == 200:
+                        try:
+                            self.wfile.flush()
+                        except OSError:
+                            pass
+                        time.sleep(0.35)
+                        server.shutdown_event.set()
+                    return
                 if path.startswith("/api/v1/approvals/"):
                     approval_id = unquote(path[len("/api/v1/approvals/"):])
                     code, payload = server._handle_approval(approval_id, self._read_json())
@@ -1137,8 +1161,8 @@ def run_api(orchestrator, console, config: Optional[Dict[str, Any]] = None, tool
         f"  AG-UI protocol {PROTOCOL_VERSION}; token file: [dim]{token_file}[/]"
     )
     try:
-        while True:
-            time.sleep(1)
+        while not server.shutdown_event.wait(1.0):
+            pass
     except KeyboardInterrupt:
         pass
     finally:

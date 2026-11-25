@@ -1037,6 +1037,7 @@ _LOCATIONS = {
 }
 
 # ── per-request hooks for the local AG-UI API ─────────────────
+EXPLICIT_SHUTDOWN = False
 _EVENT_SINK = contextvars.ContextVar("grid_event_sink", default=None)
 _POLICY_OVERRIDE = contextvars.ContextVar("grid_policy_override", default=None)
 
@@ -6076,6 +6077,8 @@ def main(argv=None):
     life_cfg = load_config().get("life") or {}
     if not args.resident and life_cfg.get("resident_autostart", False):
         def _resume_resident():
+            if EXPLICIT_SHUTDOWN:
+                return
             try:
                 from grid_resident import launch_detached
                 # atexit runs LIFO: release the database before the resident

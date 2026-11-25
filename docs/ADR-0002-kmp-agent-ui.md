@@ -217,6 +217,8 @@ Landed:
 - Live run activity in the desktop: animated **Thinking…** with elapsed time,
   then a compact `+commands · edits · thoughts · reads · tools` summary for
   tool-using runs; `/exit` saves host memory and closes the window.
+- `/shutdown` saves memory, stops the API host via `POST /api/v1/shutdown`,
+  suppresses resident auto-restart and closes the desktop.
 
 Still open:
 

@@ -27,6 +27,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollbarAdapter
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -40,6 +41,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -127,6 +129,7 @@ private val SLASH_COMMANDS = listOf(
     SlashCommand("/new", "Start a new thread"),
     SlashCommand("/clear", "Clear the current conversation"),
     SlashCommand("/exit", "Save memory and close GRID"),
+    SlashCommand("/shutdown", "Save and stop the GRID host"),
     SlashCommand("/model", "Show the active model and how to switch"),
     SlashCommand("/tokens", "Show session token and timing stats"),
     SlashCommand(
@@ -229,6 +232,7 @@ private fun App(baseUrl: String, token: String, onExit: () -> Unit) {
     var input by remember { mutableStateOf(TextFieldValue("")) }
     var busy by remember { mutableStateOf(false) }
     var commandBusy by remember { mutableStateOf(false) }
+    var confirmShutdown by remember { mutableStateOf(false) }
     var status by remember { mutableStateOf("Ready") }
     var threadId by remember { mutableStateOf(GridAgentClient.newThreadId()) }
     var model by remember { mutableStateOf("") }
@@ -482,6 +486,37 @@ private fun App(baseUrl: String, token: String, onExit: () -> Unit) {
         }
     }
 
+    fun shutdownHost() {
+        if (busy) {
+            items.add(Item.Note("Wait for the current response to finish before /shutdown."))
+            return
+        }
+        if (commandBusy) return
+        commandBusy = true
+        status = "Stopping GRID host..."
+        scope.launch {
+            try {
+                val output = withContext(Dispatchers.IO) {
+                    postShutdown(baseUrl, token)
+                }
+                items.add(Item.Note("$output\nDesktop closing."))
+                status = "Host stopped"
+                delay(900)
+                onExit()
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                items.add(
+                    Item.Error(
+                        "Shutdown failed: ${connectionAwareMessage(error, baseUrl)}"
+                    )
+                )
+                status = "Shutdown failed"
+                commandBusy = false
+            }
+        }
+    }
+
     fun handleSlashCommand(raw: String): Boolean {
         val command = raw.trim()
         if (!command.startsWith("/")) return false
@@ -509,6 +544,15 @@ private fun App(baseUrl: String, token: String, onExit: () -> Unit) {
                 status = "Ready"
             }
             name == "/exit" || name == "/quit" -> saveAndExit()
+            name == "/shutdown" -> {
+                if (busy) {
+                    items.add(
+                        Item.Note("Wait for the current response to finish before /shutdown.")
+                    )
+                } else if (!commandBusy) {
+                    confirmShutdown = true
+                }
+            }
             name == "/model" -> items.add(
                 Item.Note(
                     "Active model: ${model.ifBlank { "(unknown)" }}\n" +
@@ -668,6 +712,36 @@ private fun App(baseUrl: String, token: String, onExit: () -> Unit) {
                 onSend = { send() },
             )
         }
+    }
+    if (confirmShutdown) {
+        AlertDialog(
+            onDismissRequest = { confirmShutdown = false },
+            title = { Text("Stop GRID host?") },
+            text = {
+                Text(
+                    "This saves memory, then stops the API host, autopilot and " +
+                        "Android connectivity. The desktop will close."
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        confirmShutdown = false
+                        shutdownHost()
+                    }
+                ) {
+                    Text("Shut down", color = Danger)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmShutdown = false }) {
+                    Text("Cancel", color = Muted)
+                }
+            },
+            containerColor = PanelRaised,
+            titleContentColor = Color.White,
+            textContentColor = Muted,
+        )
     }
 }
 
@@ -1334,6 +1408,31 @@ private fun postCommand(baseUrl: String, token: String, command: String): String
         }
         throw IllegalStateException(
             root["error"]?.jsonPrimitive?.contentOrNull ?: "Command failed (HTTP $code)"
+        )
+    } finally {
+        connection.disconnect()
+    }
+}
+
+private fun postShutdown(baseUrl: String, token: String): String {
+    val connection = URI.create("$baseUrl/api/v1/shutdown").toURL().openConnection() as HttpURLConnection
+    connection.requestMethod = "POST"
+    connection.doOutput = true
+    connection.setRequestProperty("Authorization", "Bearer $token")
+    connection.setRequestProperty("Content-Type", "application/json")
+    connection.connectTimeout = 5000
+    connection.readTimeout = 15000
+    try {
+        connection.outputStream.use { it.write(ByteArray(0)) }
+        val code = connection.responseCode
+        val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+        val text = stream?.bufferedReader()?.use { it.readText() }.orEmpty()
+        val root = Json.parseToJsonElement(text.ifBlank { "{}" }).jsonObject
+        if (code in 200..299) {
+            return root["message"]?.jsonPrimitive?.contentOrNull ?: "GRID host stopped."
+        }
+        throw IllegalStateException(
+            root["error"]?.jsonPrimitive?.contentOrNull ?: "Shutdown failed (HTTP $code)"
         )
     } finally {
         connection.disconnect()
