@@ -26,7 +26,7 @@
 - New `--api` host: a loopback AG-UI 1.0 endpoint over HTTP+SSE with bearer
   auth, thread storage, live tool/activity events, approval requests and REA
   report endpoints. The API resolves the live `__main__` tools so events and
-  request-scoped policies work in the real process (152 tests total).
+  request-scoped policies work in the real process (154 tests total).
 - First Kotlin Multiplatform client under `clients/`: a shared `GridAgentClient`
   over the AG-UI Kotlin SDK, a Compose Desktop shell with a live tool timeline,
   approval cards and REA artifact cards, and a JVM contract test that replays
@@ -37,11 +37,15 @@
   active model is shown and can be switched from the UI.
 - API additions: `GET/POST /api/v1/model` and a `CUSTOM grid.stats` event with
   duration, token counts, model and tool-call count.
-- Desktop slash-command palette: typing `/` shows app commands, terminal
-  commands, and every registered GRID tool with descriptions; arrow keys
-  select, Tab completes with the cursor at the end, and Enter executes local
-  `/help`, `/new`, `/clear`, `/model`, `/tokens`, `/rea`, `/tools`, `/tool`
-  commands without sending them to the LLM.
+- Desktop slash-command palette: typing `/` shows a scrollable list of app
+  commands, terminal-style commands, and every registered GRID tool with
+  descriptions; arrow keys (including numpad) select, Tab completes with the
+  cursor at the end, and Enter executes local commands without sending them to
+  the LLM.
+- `POST /api/v1/command` runs terminal-style commands against the live host, so
+  `/memory`, `/life`, `/plan`, `/ref`, `/jobs`, `/pb`, `/persona`, `/social`,
+  `/comms`, `/ctf`, `/game`, `/gcal`, `/gsheet`, `/save` and `/export` work
+  directly from the desktop composer and render their output in chat.
 - Forced `kotlinx-datetime` 0.6.2 on the desktop runtime because the AG-UI SDK
   still calls `Clock.System`, while Compose Material3 1.9 resolves 0.7.x.
 - Android companion: `androidApp` uses the Android-KMP library plugin in

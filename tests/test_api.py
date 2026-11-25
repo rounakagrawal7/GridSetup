@@ -85,6 +85,12 @@ class APITestCase(unittest.TestCase):
         self.assertEqual(
             requests.get(f"{self.base}/health", headers=self.headers).status_code, 200
         )
+        self.assertEqual(
+            requests.post(
+                f"{self.base}/command", json={"command": "/plan"}, timeout=5
+            ).status_code,
+            401,
+        )
 
     def test_health_reports_protocol(self):
         payload = requests.get(f"{self.base}/health", headers=self.headers).json()
@@ -99,6 +105,66 @@ class APITestCase(unittest.TestCase):
         names = {row["name"] for row in payload["tools"]}
         self.assertIn("rea", names)
         self.assertIn("web_search", names)
+
+    def test_local_command_endpoint(self):
+        help_payload = requests.post(
+            f"{self.base}/command",
+            json={"command": "/help"},
+            headers=self.headers,
+            timeout=5,
+        ).json()
+        self.assertTrue(help_payload["ok"])
+        self.assertIn("/memory", help_payload["output"])
+
+        memory_payload = requests.post(
+            f"{self.base}/command",
+            json={"command": "/memory status"},
+            headers=self.headers,
+            timeout=5,
+        ).json()
+        self.assertTrue(memory_payload["ok"])
+        self.assertTrue(memory_payload["output"])
+
+        life_payload = requests.post(
+            f"{self.base}/command",
+            json={"command": "/life status"},
+            headers=self.headers,
+            timeout=5,
+        ).json()
+        self.assertTrue(life_payload["ok"])
+        self.assertTrue(life_payload["output"])
+
+        plan_payload = requests.post(
+            f"{self.base}/command",
+            json={"command": "/plan"},
+            headers=self.headers,
+            timeout=5,
+        ).json()
+        self.assertTrue(plan_payload["ok"])
+        self.assertTrue(self.orch.plan_mode)
+        requests.post(
+            f"{self.base}/command",
+            json={"command": "/plan"},
+            headers=self.headers,
+            timeout=5,
+        )
+        self.assertFalse(self.orch.plan_mode)
+
+    def test_local_command_rejects_unknown_and_plain_text(self):
+        unknown = requests.post(
+            f"{self.base}/command",
+            json={"command": "/nope"},
+            headers=self.headers,
+            timeout=5,
+        )
+        self.assertEqual(unknown.status_code, 400)
+        plain = requests.post(
+            f"{self.base}/command",
+            json={"command": "hello"},
+            headers=self.headers,
+            timeout=5,
+        )
+        self.assertEqual(plain.status_code, 400)
 
     def test_model_info_and_switch(self):
         info = requests.get(f"{self.base}/model", headers=self.headers).json()

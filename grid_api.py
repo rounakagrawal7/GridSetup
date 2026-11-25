@@ -310,6 +310,358 @@ class GridAPIServer:
         rows.sort(key=lambda row: row["name"])
         return {"ok": True, "count": len(rows), "tools": rows}
 
+    # -- terminal-style local commands ---------------------------------
+    #
+    # The desktop composer exposes the same shortcuts as the terminal. These
+    # handlers return plain text so the client can render them as a note
+    # without parsing Rich markup.
+
+    def _cmd_memory(self, args: str) -> str:
+        tools = getattr(self.runtime, "Tools", None)
+        recaller = getattr(tools, "recaller", None) if tools is not None else None
+        if recaller is None:
+            return "Memory layer not active (needs duckdb). Run: pip install duckdb"
+        sub = args.strip()
+        low = sub.lower()
+        if low in ("", "status", "show"):
+            return (
+                f"{tools._memory_status()}\n\n"
+                "Tip: /memory <query> recalls; /memory add <fact> teaches it; "
+                "/memory profile shows the user profile."
+            )
+        if low in ("profile", "user", "about"):
+            return recaller.profile_text()
+        if low.startswith("add "):
+            return recaller.remember(sub[4:].strip())
+        if low.startswith("forget "):
+            return recaller.forget(sub[7:].strip())
+        if low in ("build-profile", "build profile", "backfill", "learn"):
+            added = recaller.backfill_profile()
+            return f"Profile updated: {added} new fact(s).\n\n{recaller.profile_text()}"
+        if low in ("clear-profile", "reset-profile"):
+            return recaller.clear_profile()
+        if low in ("clear", "reset"):
+            recaller.db.clear_memory()
+            return "Layered memory cleared (profile untouched)."
+        return f"{tools._memory_status()}\n\n{tools._memory_recall(sub)}"
+
+    def _cmd_life(self, args: str) -> str:
+        tools = getattr(self.runtime, "Tools", None)
+        life = getattr(tools, "life", None) if tools is not None else None
+        if life is None:
+            return "GRID Life needs DuckDB. Run: pip install duckdb"
+        body = args.strip()
+        if not body:
+            return (
+                f"{life.status_text()}\n\n"
+                "Desktop: /life status|help|log|goals|goal|commitments|commitment|"
+                "pause|resume|identity|tick. Live autopilot loops stay in the terminal."
+            )
+        parts = body.split(maxsplit=2)
+        sub = parts[0].lower()
+        arg = parts[1].strip() if len(parts) > 1 else ""
+        if sub in ("status", "show"):
+            return life.status_text()
+        if sub == "help":
+            return (
+                "GRID autopilot\n"
+                "  /life              status\n"
+                "  /life status       current state\n"
+                "  /life log [n]      recent activity\n"
+                "  /life goals        active goals\n"
+                "  /life goal add <title> | /life goal done <id>\n"
+                "  /life commitments  open commitments\n"
+                "  /life commitment add <text> | /life commitment done <id>\n"
+                "  /life pause|resume stop or resume autonomous work\n"
+                "  /life identity     persona and identity\n"
+                "  /life tick         run one autonomous cycle\n"
+                "Live autopilot loops are interactive and stay in the terminal."
+            )
+        if sub == "log":
+            limit = int(arg) if arg.isdigit() else 20
+            return life.log_text(limit)
+        if sub == "goals":
+            return life.goals_text()
+        if sub == "goal":
+            action, _, rest = arg.partition(" ")
+            if action == "add" and rest.strip():
+                title = rest.strip()
+                goal_type = "once"
+                if title.lower().startswith("ongoing "):
+                    goal_type = "ongoing"
+                    title = title[8:].strip()
+                return life.add_goal(title, goal_type=goal_type)
+            if action == "done" and rest.strip():
+                return life.complete_goal(rest.strip())
+            return "Usage: /life goal add <title> | /life goal done <id>"
+        if sub == "commitments":
+            return life.commitments_text()
+        if sub == "commitment":
+            action, _, rest = arg.partition(" ")
+            if action == "add" and rest.strip():
+                return life.add_commitment(rest.strip())
+            if action == "done" and rest.strip():
+                return life.complete_commitment(rest.strip())
+            return "Usage: /life commitment add <description> | /life commitment done <id>"
+        if sub == "pause":
+            return life.set_paused(True)
+        if sub == "resume":
+            return life.set_paused(False)
+        if sub == "identity":
+            return life.identity_text()
+        if sub in ("tick", "wake"):
+            result = life.tick(manual=True)
+            text = result.get("summary", "Tick complete.")
+            if result.get("detail"):
+                text += "\n" + result["detail"]
+            for message in life.pending_messages():
+                text += "\n\n" + (message.get("detail") or message.get("summary") or "")
+                life.mark_delivered(message["id"])
+            return text
+        if sub == "awake":
+            return (
+                "Awake runs are interactive. Use /life tick for one autonomous "
+                "cycle, or run /life awake <task> in the terminal client."
+            )
+        return (
+            "Usage: /life [status|help|log|goals|goal|commitments|commitment|"
+            "pause|resume|identity|tick]"
+        )
+
+    def _cmd_plan(self, _args: str) -> str:
+        current = bool(getattr(self.orchestrator, "plan_mode", False))
+        self.orchestrator.plan_mode = not current
+        return f"Planner mode {'enabled' if self.orchestrator.plan_mode else 'disabled'}."
+
+    def _cmd_ref(self, args: str) -> str:
+        tools = getattr(self.runtime, "Tools", None)
+        recaller = getattr(tools, "recaller", None) if tools is not None else None
+        if recaller is None:
+            return "Memory layer not active."
+        ref_id = args.strip()
+        if not ref_id:
+            return "Usage: /ref <id> — read an offloaded tool output."
+        return recaller.read_ref(ref_id)
+
+    def _cmd_jobs(self, args: str) -> str:
+        tools = getattr(self.runtime, "Tools", None)
+        manager = getattr(tools, "skills", None) if tools is not None else None
+        if manager is None:
+            return "Skill system not initialized."
+        sub = args.strip()
+        if not sub or sub == "list":
+            skills = manager.list_skills()
+            if not skills:
+                return "No skills defined yet."
+            lines = [f"Skills ({len(skills)}):"]
+            for skill in skills:
+                status = "enabled" if skill.get("enabled") else "disabled"
+                lines.append(
+                    f"  {str(skill.get('name', '')).ljust(20)} "
+                    f"{status.ljust(8)} {skill.get('description', '')}"
+                )
+            return "\n".join(lines)
+        if sub.startswith("show "):
+            name = sub.split(maxsplit=1)[1].strip().lower().replace(" ", "_")
+            info = manager.skills.get(name)
+            if not info:
+                return f"Skill '{name}' not found."
+            code = manager.get_code(name) or ""
+            lines = [
+                f"Skill: {name}",
+                f"Description: {info.get('description', '')}",
+                f"Input:       {info.get('input_desc', '')}",
+                f"Status:      {'enabled' if info.get('enabled', True) else 'disabled'}",
+            ]
+            if info.get("schema"):
+                lines.append(f"Schema:      {json.dumps(info['schema'], indent=2)}")
+            if code:
+                lines.append("Code:")
+                lines.extend(f"  {line}" for line in code.splitlines())
+            return "\n".join(lines)
+        if sub.startswith("toggle "):
+            name = sub.split(maxsplit=1)[1].strip().lower().replace(" ", "_")
+            return manager.toggle(name)
+        return (
+            "Desktop supports /jobs list, /jobs show <name> and /jobs toggle <name>. "
+            "Create, edit and delete skills in the terminal client."
+        )
+
+    def _cmd_pb(self, args: str) -> str:
+        tools = getattr(self.runtime, "Tools", None)
+        pb = getattr(tools, "pb", None) if tools is not None else None
+        if pb is None:
+            return "PocketBase not initialized. Check the pocketbase-client install."
+        sub = args.strip().lower()
+        if not sub or sub == "status":
+            return pb.status_text()
+        if sub == "start":
+            return "PocketBase started." if pb.start() else "Failed to start PocketBase."
+        if sub == "stop":
+            pb.stop()
+            return "PocketBase stopped."
+        if sub in ("install", "download"):
+            if pb.download():
+                return "PocketBase downloaded. Run /pb start to launch it."
+            return "PocketBase download failed. Try manually from https://pocketbase.io"
+        if sub == "sync":
+            if not getattr(pb, "token", None):
+                return "PocketBase not connected. Start it first with /pb start."
+            memory = getattr(tools, "memory_ref", None)
+            if memory is None:
+                return "Memory not available."
+            pb.sync_memory(memory.history, "grid")
+            return "Memory synced to PocketBase."
+        return "Usage: /pb [status|start|stop|install|sync]"
+
+    def _cmd_persona(self, args: str) -> str:
+        from grid_agent_social import moltbook_social
+
+        sub = args.strip()
+        result = moltbook_social(f"persona {sub}".strip())
+        tools = getattr(self.runtime, "Tools", None)
+        life = getattr(tools, "life", None) if tools is not None else None
+        if life is not None:
+            low = sub.lower()
+            if low.startswith("set ") and "error:" not in result.lower():
+                life.adopt_persona(sub[4:].strip())
+            elif low == "clear":
+                life.clear_persona()
+        return result
+
+    def _cmd_social(self, args: str) -> str:
+        from grid_agent_social import moltbook_social
+
+        return moltbook_social(args.strip() or "help")
+
+    def _cmd_comms(self, args: str) -> str:
+        tools = getattr(self.runtime, "Tools", None)
+        if tools is None or not hasattr(tools, "_comms"):
+            return "Communication tools are unavailable."
+        return str(tools._comms(args.strip()))
+
+    def _cmd_ctf(self, args: str) -> str:
+        from grid_ctf import ctf_main
+
+        return ctf_main(args.strip() or "help")
+
+    def _cmd_game(self, args: str) -> str:
+        from grid_game import game_main
+
+        return str(game_main(args.strip() or "help"))
+
+    def _cmd_gcal(self, args: str) -> str:
+        from grid_google import google_calendar
+
+        return google_calendar(args.strip() or "help")
+
+    def _cmd_gsheet(self, args: str) -> str:
+        from grid_sheets import google_sheets
+
+        return google_sheets(args.strip() or "help")
+
+    def _cmd_save(self, _args: str) -> str:
+        tools = getattr(self.runtime, "Tools", None)
+        memory = getattr(tools, "memory_ref", None) if tools is not None else None
+        if memory is None:
+            return "Conversation memory unavailable."
+        memory.save()
+        name = getattr(self.runtime, "MEMORY_FILE", "memory.json")
+        return f"Memory saved to '{name}'."
+
+    def _cmd_export(self, args: str) -> str:
+        tools = getattr(self.runtime, "Tools", None)
+        memory = getattr(tools, "memory_ref", None) if tools is not None else None
+        if memory is None:
+            return "Conversation memory unavailable."
+        export = getattr(self.runtime, "export_history", None)
+        if not callable(export):
+            return "Export is unavailable in this runtime."
+        fmt = (args.strip() or "txt").split()[0].lower()
+        return str(export(memory, fmt))
+
+    def _cmd_model(self, _args: str) -> str:
+        info = self._model_info()
+        return (
+            f"Active model: {info.get('model') or '(unknown)'}\n"
+            f"Available: {', '.join(info.get('models') or []) or '(none detected)'}\n"
+            "Use Change model in the desktop sidebar to switch."
+        )
+
+    def _cmd_tools(self, _args: str) -> str:
+        info = self._tools_info()
+        lines = [f"GRID tools ({info['count']}):"]
+        lines.extend(
+            f"  {row['name'].ljust(22)} = {row['description']}"
+            for row in info["tools"]
+        )
+        return "\n".join(lines)
+
+    def _cmd_help(self, _args: str) -> str:
+        return (
+            "Local commands:\n"
+            "  /help              = this list\n"
+            "  /new, /clear       = client-side thread controls\n"
+            "  /model             = active model and available models\n"
+            "  /tokens            = session token and timing stats\n"
+            "  /tools             = list every GRID tool\n"
+            "  /tool <name> <in>  = run a tool through the agent\n"
+            "  /rea authorized <url> = authorized passive teardown\n"
+            "  /memory ...        = recall, add, profile, backfill\n"
+            "  /life ...          = status, goals, commitments, tick\n"
+            "  /plan              = toggle planner mode\n"
+            "  /ref <id>          = read an offloaded tool output\n"
+            "  /jobs ...          = list/show/toggle dynamic skills\n"
+            "  /persona ...       = view or set GRID persona\n"
+            "  /social ...        = Moltbook social platform\n"
+            "  /pb ...            = PocketBase status/start/stop/sync\n"
+            "  /export [fmt]      = export server chat history\n"
+            "  /save              = save server conversation memory\n"
+            "  /comms ...         = communication tools reference\n"
+            "  /ctf ...           = local CTF sandbox\n"
+            "  /game ...          = game worlds\n"
+            "  /gcal ...          = Google Calendar\n"
+            "  /gsheet ...        = Google Sheets + Excel\n"
+            "Type / to autocomplete; ↑↓ select, Tab complete."
+        )
+
+    def _local_command(self, raw: str) -> Tuple[int, Dict[str, Any]]:
+        command = str(raw or "").strip()
+        if not command.startswith("/"):
+            return 400, {"ok": False, "error": "command must start with /"}
+        name, _, args = command.partition(" ")
+        name = name.lower()
+        handlers = {
+            "/help": self._cmd_help,
+            "/memory": self._cmd_memory,
+            "/life": self._cmd_life,
+            "/plan": self._cmd_plan,
+            "/ref": self._cmd_ref,
+            "/jobs": self._cmd_jobs,
+            "/pb": self._cmd_pb,
+            "/persona": self._cmd_persona,
+            "/social": self._cmd_social,
+            "/comms": self._cmd_comms,
+            "/ctf": self._cmd_ctf,
+            "/game": self._cmd_game,
+            "/gcal": self._cmd_gcal,
+            "/gsheet": self._cmd_gsheet,
+            "/save": self._cmd_save,
+            "/export": self._cmd_export,
+            "/model": self._cmd_model,
+            "/tools": self._cmd_tools,
+        }
+        handler = handlers.get(name)
+        if handler is None:
+            return 400, {"ok": False, "error": f"unknown local command: {name}"}
+        try:
+            output = handler(args)
+        except Exception as exc:
+            return 500, {"ok": False, "error": f"{name} failed: {exc}"}
+        if not isinstance(output, str):
+            output = str(output)
+        return 200, {"ok": True, "command": name, "output": output}
+
     def _rea_reports(self) -> List[Dict[str, Any]]:
         rows = []
         if not self.refs_dir.exists():
@@ -693,6 +1045,11 @@ class GridAPIServer:
                     return
                 if path == "/api/v1/model":
                     code, payload = server._set_model(self._read_json())
+                    server._json(self, code, payload)
+                    return
+                if path == "/api/v1/command":
+                    body = self._read_json()
+                    code, payload = server._local_command(body.get("command", ""))
                     server._json(self, code, payload)
                     return
                 if path.startswith("/api/v1/approvals/"):

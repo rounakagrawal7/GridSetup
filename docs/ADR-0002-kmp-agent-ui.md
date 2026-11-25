@@ -210,7 +210,10 @@ Landed:
   tool-only runs render one output card; slash-command palette with
   arrow-key selection, cursor-at-end completion, every app/tool command, and
   local `/help`, `/new`, `/clear`, `/model`, `/tokens`, `/rea`, `/tools`,
-  `/tool` handling.
+  `/tool` handling;
+- `POST /api/v1/command` dispatches terminal-style host commands from the
+  desktop (`/memory`, `/life`, `/plan`, `/ref`, `/jobs`, `/pb`, `/persona`,
+  `/social`, `/comms`, `/ctf`, `/game`, `/gcal`, `/gsheet`, `/save`, `/export`).
 
 Still open:
 

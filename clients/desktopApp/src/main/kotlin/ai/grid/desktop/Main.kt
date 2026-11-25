@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -83,10 +84,12 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.put
 import kotlin.time.Duration.Companion.milliseconds
 
 private val Background = Color(0xFF0B0F0C)
@@ -117,24 +120,24 @@ private val SLASH_COMMANDS = listOf(
     ),
     SlashCommand("/tools", "List every GRID tool"),
     SlashCommand("/tool", "Run a tool: /tool <name> <input>", template = "/tool "),
-    SlashCommand("/memory", "Terminal: memory commands"),
-    SlashCommand("/life", "Terminal: autopilot controls"),
-    SlashCommand("/plan", "Terminal: toggle planner mode"),
-    SlashCommand("/ref", "Terminal: read an offloaded output"),
-    SlashCommand("/jobs", "Terminal: manage dynamic skills"),
-    SlashCommand("/persona", "Terminal: set/view identity"),
-    SlashCommand("/social", "Terminal: Moltbook social platform"),
-    SlashCommand("/pb", "Terminal: PocketBase control"),
-    SlashCommand("/export", "Terminal: export chat (json/txt/html)"),
-    SlashCommand("/save", "Terminal: save conversation"),
-    SlashCommand("/comms", "Terminal: Telegram/email channels"),
-    SlashCommand("/ctf", "Terminal: local CTF sandbox"),
-    SlashCommand("/game", "Terminal: game worlds"),
-    SlashCommand("/gcal", "Terminal: Google Calendar"),
-    SlashCommand("/gsheet", "Terminal: Google Sheets + Excel"),
+    SlashCommand("/memory", "Recall, add facts, show profile"),
+    SlashCommand("/life", "Status, goals, commitments, tick"),
+    SlashCommand("/plan", "Toggle planner mode"),
+    SlashCommand("/ref", "Read an offloaded tool output", template = "/ref "),
+    SlashCommand("/jobs", "List/show/toggle dynamic skills"),
+    SlashCommand("/persona", "View or set GRID persona"),
+    SlashCommand("/social", "Moltbook social platform"),
+    SlashCommand("/pb", "PocketBase status/start/stop/sync"),
+    SlashCommand("/export", "Export server chat (json/txt/html)"),
+    SlashCommand("/save", "Save server conversation memory"),
+    SlashCommand("/comms", "Communication tools reference"),
+    SlashCommand("/ctf", "Local CTF sandbox"),
+    SlashCommand("/game", "Game worlds"),
+    SlashCommand("/gcal", "Google Calendar"),
+    SlashCommand("/gsheet", "Google Sheets + Excel"),
 )
 
-private val TERMINAL_ONLY_COMMANDS = setOf(
+private val SERVER_COMMANDS = setOf(
     "/memory", "/life", "/plan", "/ref", "/jobs", "/persona", "/social",
     "/pb", "/export", "/save", "/comms", "/ctf", "/game", "/gcal", "/gsheet",
 )
@@ -199,6 +202,7 @@ private fun App(baseUrl: String, token: String) {
     val inputFocus = remember { FocusRequester() }
     var input by remember { mutableStateOf(TextFieldValue("")) }
     var busy by remember { mutableStateOf(false) }
+    var commandBusy by remember { mutableStateOf(false) }
     var status by remember { mutableStateOf("Ready") }
     var threadId by remember { mutableStateOf(GridAgentClient.newThreadId()) }
     var model by remember { mutableStateOf("") }
@@ -321,7 +325,7 @@ private fun App(baseUrl: String, token: String) {
 
     fun send(promptOverride: String? = null) {
         val prompt = (promptOverride ?: input.text).trim()
-        if (prompt.isEmpty() || busy) return
+        if (prompt.isEmpty() || busy || commandBusy) return
         if (promptOverride == null) input = TextFieldValue("")
         items.add(Item.User(prompt))
         busy = true
@@ -337,6 +341,29 @@ private fun App(baseUrl: String, token: String) {
                 status = if (message.startsWith("GRID API is offline")) "API offline" else "Error"
             } finally {
                 busy = false
+            }
+        }
+    }
+
+    fun runServerCommand(raw: String) {
+        val command = raw.trim()
+        if (command.isEmpty() || commandBusy) return
+        commandBusy = true
+        status = "Running ${command.substringBefore(" ")}"
+        scope.launch {
+            try {
+                val output = withContext(Dispatchers.IO) {
+                    postCommand(baseUrl, token, command)
+                }
+                items.add(Item.Note(output))
+                status = "Ready"
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                items.add(Item.Error(connectionAwareMessage(error, baseUrl)))
+                status = "Error"
+            } finally {
+                commandBusy = false
             }
         }
     }
@@ -416,15 +443,10 @@ private fun App(baseUrl: String, token: String) {
                     send("rea $target")
                 }
             }
+            name in SERVER_COMMANDS -> runServerCommand(command)
             tools.any { it.name == toolName } -> {
                 send(("$toolName $args").trim())
             }
-            name in TERMINAL_ONLY_COMMANDS -> items.add(
-                Item.Note(
-                    "$name is available in the terminal client.\n" +
-                        "Desktop commands: /help /new /clear /model /tokens /rea /tools /tool."
-                )
-            )
             else -> items.add(
                 Item.Note("Unknown command: $name\nType /help for available commands.")
             )
@@ -521,7 +543,7 @@ private fun App(baseUrl: String, token: String) {
             Spacer(Modifier.height(12.dp))
             Composer(
                 input = input,
-                busy = busy,
+                busy = busy || commandBusy,
                 enabled = token.isNotBlank(),
                 focusRequester = inputFocus,
                 tools = tools,
@@ -877,6 +899,7 @@ private fun Composer(
     val query = text.removePrefix("/").substringBefore(" ").trim()
     var dismissed by remember { mutableStateOf(false) }
     var selected by remember { mutableStateOf(0) }
+    val suggestionState = rememberLazyListState()
     val filtered = allCommands.filter {
         it.name.removePrefix("/").startsWith(query, ignoreCase = true)
     }
@@ -888,6 +911,13 @@ private fun Composer(
     LaunchedEffect(query) {
         selected = 0
         dismissed = false
+        if (showSuggestions) suggestionState.scrollToItem(0)
+    }
+
+    LaunchedEffect(selected, showSuggestions) {
+        if (showSuggestions && filtered.isNotEmpty()) {
+            suggestionState.animateScrollToItem(selected.coerceIn(0, filtered.lastIndex))
+        }
     }
 
     fun apply(command: SlashCommand) {
@@ -907,7 +937,7 @@ private fun Composer(
                 Column(Modifier.padding(6.dp)) {
                     Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 3.dp)) {
                         Text(
-                            "COMMANDS · ${allCommands.size} options",
+                            "COMMANDS · ${filtered.size}/${allCommands.size}",
                             color = GridGreen,
                             fontSize = 9.sp,
                             letterSpacing = 1.2.sp,
@@ -915,26 +945,31 @@ private fun Composer(
                         Spacer(Modifier.weight(1f))
                         Text("↑↓ select · Tab complete · Esc close", color = Muted, fontSize = 9.sp)
                     }
-                    filtered.take(10).forEachIndexed { index, command ->
-                        Row(
-                            Modifier
-                                .fillMaxWidth()
-                                .background(
-                                    if (index == selected) Color(0xFF173B27) else Color.Transparent,
-                                    RoundedCornerShape(6.dp),
+                    LazyColumn(
+                        state = suggestionState,
+                        modifier = Modifier.fillMaxWidth().heightIn(max = 280.dp),
+                    ) {
+                        itemsIndexed(filtered) { index, command ->
+                            Row(
+                                Modifier
+                                    .fillMaxWidth()
+                                    .background(
+                                        if (index == selected) Color(0xFF173B27) else Color.Transparent,
+                                        RoundedCornerShape(6.dp),
+                                    )
+                                    .clickable { apply(command) }
+                                    .padding(horizontal = 8.dp, vertical = 7.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Text(
+                                    command.name,
+                                    color = GridGreen,
+                                    fontSize = 12.sp,
+                                    fontFamily = FontFamily.Monospace,
+                                    modifier = Modifier.width(140.dp),
                                 )
-                                .clickable { apply(command) }
-                                .padding(horizontal = 8.dp, vertical = 7.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Text(
-                                command.name,
-                                color = GridGreen,
-                                fontSize = 12.sp,
-                                fontFamily = FontFamily.Monospace,
-                                modifier = Modifier.width(140.dp),
-                            )
-                            Text("= ${command.description}", color = Muted, fontSize = 11.sp)
+                                Text("= ${command.description}", color = Muted, fontSize = 11.sp)
+                            }
                         }
                     }
                 }
@@ -949,11 +984,11 @@ private fun Composer(
                         false
                     } else if (showSuggestions) {
                         when (event.key) {
-                            Key.DirectionDown -> {
+                            Key.DirectionDown, Key.NumPadDirectionDown -> {
                                 selected = (selected + 1) % filtered.size
                                 true
                             }
-                            Key.DirectionUp -> {
+                            Key.DirectionUp, Key.NumPadDirectionUp -> {
                                 selected = (selected - 1 + filtered.size) % filtered.size
                                 true
                             }
@@ -1091,6 +1126,32 @@ private fun fetchModelInfo(baseUrl: String, token: String): ModelInfo? {
         }
     } catch (_: Exception) {
         null
+    }
+}
+
+private fun postCommand(baseUrl: String, token: String, command: String): String {
+    val connection = URI.create("$baseUrl/api/v1/command").toURL().openConnection() as HttpURLConnection
+    connection.requestMethod = "POST"
+    connection.doOutput = true
+    connection.setRequestProperty("Authorization", "Bearer $token")
+    connection.setRequestProperty("Content-Type", "application/json")
+    connection.connectTimeout = 5000
+    connection.readTimeout = 600000
+    try {
+        val payload = buildJsonObject { put("command", command) }.toString()
+        connection.outputStream.use { it.write(payload.toByteArray(Charsets.UTF_8)) }
+        val code = connection.responseCode
+        val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+        val text = stream?.bufferedReader()?.use { it.readText() }.orEmpty()
+        val root = Json.parseToJsonElement(text.ifBlank { "{}" }).jsonObject
+        if (code in 200..299) {
+            return root["output"]?.jsonPrimitive?.contentOrNull ?: "(no output)"
+        }
+        throw IllegalStateException(
+            root["error"]?.jsonPrimitive?.contentOrNull ?: "Command failed (HTTP $code)"
+        )
+    } finally {
+        connection.disconnect()
     }
 }
 

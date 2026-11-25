@@ -371,6 +371,7 @@ Endpoints:
 | `GET` | `/api/v1/health` | protocol, model, thread/report counts |
 | `GET` | `/api/v1/model` | active model and available models |
 | `POST` | `/api/v1/model` | switch the active model |
+| `POST` | `/api/v1/command` | run a terminal-style local command (`/memory`, `/life`, `/plan`, `/jobs`, ...) |
 | `GET` | `/api/v1/threads` | thread summaries |
 | `GET` | `/api/v1/threads/<id>` | stored messages |
 | `POST` | `/api/v1/agent` | `RunAgentInput`; returns an SSE stream |
@@ -405,7 +406,7 @@ cd clients
 .\gradlew.bat :desktopApp:run
 ```
 
-The desktop finds the token at `../run/api_token`, `run/api_token`, or `GRID_API_TOKEN`; pass `--url` or `--token-file` to override. It renders user/assistant messages, live tool cards, REA report artifacts, and approval requests. Tool-only runs show a single tool card (no duplicated assistant bubble); each assistant reply carries its duration and token count, the sidebar has a session token meter, and the chat has a visible scrollbar. The model is shown in the sidebar and can be switched from the **Change model** menu without restarting. Type `/` in the composer for the command palette (`/help`, `/new`, `/clear`, `/model`, `/tokens`, `/rea`, `/tools`, `/tool`, terminal commands, and every registered GRID tool), with arrow-key selection and Tab completion; the cursor lands at the end of the completed command.
+The desktop finds the token at `../run/api_token`, `run/api_token`, or `GRID_API_TOKEN`; pass `--url` or `--token-file` to override. It renders user/assistant messages, live tool cards, REA report artifacts, and approval requests. Tool-only runs show a single tool card (no duplicated assistant bubble); each assistant reply carries its duration and token count, the sidebar has a session token meter, and the chat has a visible scrollbar. The model is shown in the sidebar and can be switched from the **Change model** menu without restarting. Type `/` in the composer for the command palette (`/help`, `/new`, `/clear`, `/model`, `/tokens`, `/rea`, `/tools`, `/tool`, every registered GRID tool, and terminal-style commands), with arrow-key selection and Tab completion; the cursor lands at the end of the completed command. Local commands such as `/memory`, `/life`, `/plan`, `/ref`, `/jobs`, `/pb`, `/persona`, `/social`, `/comms`, `/ctf`, `/game`, `/gcal`, `/gsheet`, `/save` and `/export` run against the host through `POST /api/v1/command` and render their output in chat.
 
 Android:
 
