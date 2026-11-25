@@ -1125,6 +1125,10 @@ class GridAPIServer:
             stored.append(
                 {"id": message_id, "role": "assistant", "content": display_text}
             )
+            existing = self.threads.get(thread_id) or {}
+            prior = existing.get("messages") if isinstance(existing, dict) else None
+            if isinstance(prior, list) and len(stored) <= 2:
+                stored = list(prior) + stored
             self.threads.put(thread_id, stored)
         except Exception as exc:
             stream.send({"type": "STEP_FINISHED", "stepName": step_name})

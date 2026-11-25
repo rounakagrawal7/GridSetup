@@ -103,6 +103,7 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -265,6 +266,7 @@ private fun App(
     var provider by remember { mutableStateOf("") }
     var providerInfo by remember { mutableStateOf<ProviderInfo?>(null) }
     var showProviderDialog by remember { mutableStateOf(false) }
+    var threads by remember { mutableStateOf(emptyList<ThreadSummary>()) }
     var tools by remember { mutableStateOf(emptyList<ToolInfo>()) }
     var totalTokens by remember { mutableStateOf(0) }
     var lastLatency by remember { mutableStateOf(0L) }
@@ -314,6 +316,8 @@ private fun App(
         }
         val toolList = withContext(Dispatchers.IO) { fetchTools(baseUrl, candidate) }
         if (toolList != null) tools = toolList
+        val threadList = withContext(Dispatchers.IO) { fetchThreads(baseUrl, candidate) }
+        if (threadList != null) threads = threadList
     }
 
     LaunchedEffect(projectRoot, apiOnline) {
@@ -457,6 +461,12 @@ private fun App(
                 finishActivity()
                 busy = false
                 status = "Ready"
+                scope.launch {
+                    val list = withContext(Dispatchers.IO) {
+                        fetchThreads(baseUrl, token)
+                    }
+                    if (list != null) threads = list
+                }
             }
             is GridEvent.Error -> {
                 finishActivity()
@@ -824,6 +834,45 @@ private fun App(
         }
     }
 
+    fun openThread(id: String) {
+        if (busy || commandBusy) {
+            items.add(Item.Note("Wait for the current response to finish before opening a thread."))
+            return
+        }
+        if (id == threadId) return
+        scope.launch {
+            status = "Loading thread..."
+            val messages = withContext(Dispatchers.IO) {
+                fetchThreadMessages(baseUrl, token, id)
+            }
+            if (messages == null) {
+                items.add(Item.Error("Could not load that thread."))
+                status = "Error"
+                return@launch
+            }
+            threadId = id
+            items.clear()
+            messages.forEach { message ->
+                when (message.role) {
+                    "user" -> items.add(Item.User(message.content))
+                    "assistant" -> if (message.content.isNotBlank()) {
+                        items.add(Item.Assistant(message.id, message.content))
+                    }
+                }
+            }
+            status = "Ready"
+        }
+    }
+
+    fun refreshThreads() {
+        scope.launch {
+            val list = withContext(Dispatchers.IO) {
+                fetchThreads(baseUrl, token)
+            }
+            if (list != null) threads = list
+        }
+    }
+
     fun changeModel(requested: String) {
         if (busy || commandBusy) {
             items.add(Item.Note("Wait for the current response to finish before switching models."))
@@ -872,12 +921,16 @@ private fun App(
             model = model,
             models = models,
             provider = provider,
+            threads = threads,
+            activeThreadId = threadId,
             totalTokens = totalTokens,
             lastLatency = lastLatency,
             lastTokens = lastTokens,
             runCount = runCount,
             onModelChange = { changeModel(it) },
             onProviderChange = { openProviderDialog() },
+            onThreadOpen = { openThread(it) },
+            onRefreshThreads = { refreshThreads() },
             onNewThread = {
                 threadId = GridAgentClient.newThreadId()
                 items.clear()
@@ -1397,12 +1450,16 @@ private fun Sidebar(
     model: String,
     models: List<String>,
     provider: String,
+    threads: List<ThreadSummary>,
+    activeThreadId: String,
     totalTokens: Int,
     lastLatency: Long,
     lastTokens: Int,
     runCount: Int,
     onModelChange: (String) -> Unit,
     onProviderChange: () -> Unit,
+    onThreadOpen: (String) -> Unit,
+    onRefreshThreads: () -> Unit,
     onNewThread: () -> Unit,
     onQuickPrompt: (String) -> Unit,
 ) {
@@ -1505,7 +1562,39 @@ private fun Sidebar(
             colors = ButtonDefaults.buttonColors(containerColor = PanelRaised, contentColor = GridGreen),
             modifier = Modifier.fillMaxWidth(),
         ) { Text("New thread") }
-        Spacer(Modifier.height(18.dp))
+        Spacer(Modifier.height(10.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("HISTORY", color = Muted, fontSize = 10.sp, letterSpacing = 1.5.sp)
+            Spacer(Modifier.weight(1f))
+            TextButton(onClick = onRefreshThreads) {
+                Text("Refresh", color = Muted, fontSize = 9.sp)
+            }
+        }
+        if (threads.isEmpty()) {
+            Text("No saved threads", color = Muted, fontSize = 10.sp)
+        } else {
+            threads.take(12).forEach { thread ->
+                Column(
+                    Modifier
+                        .fillMaxWidth()
+                        .clickable { onThreadOpen(thread.id) }
+                        .padding(vertical = 3.dp)
+                ) {
+                    Text(
+                        thread.title.ifBlank { "Untitled" },
+                        color = if (thread.id == activeThreadId) GridGreen else GridGreenDim,
+                        fontSize = 11.sp,
+                        maxLines = 1,
+                    )
+                    Text(
+                        "${thread.messageCount} messages",
+                        color = Muted,
+                        fontSize = 9.sp,
+                    )
+                }
+            }
+        }
+        Spacer(Modifier.height(12.dp))
         Text("QUICK START", color = Muted, fontSize = 10.sp, letterSpacing = 1.5.sp)
         Spacer(Modifier.height(8.dp))
         listOf(
@@ -2120,6 +2209,19 @@ private data class ProviderInfo(
     val providers: List<ProviderOption>,
 )
 
+private data class ThreadSummary(
+    val id: String,
+    val title: String,
+    val updatedAt: String,
+    val messageCount: Int,
+)
+
+private data class StoredMessage(
+    val id: String,
+    val role: String,
+    val content: String,
+)
+
 private fun providerLabel(id: String): String =
     DEFAULT_PROVIDERS.firstOrNull { it.id == id }?.name ?: id.ifBlank { "unknown" }
 
@@ -2154,6 +2256,81 @@ private fun fetchTools(baseUrl: String, token: String): List<ToolInfo>? {
                         val description = item["description"]?.jsonPrimitive?.contentOrNull ?: ""
                         ToolInfo(name, description)
                     }
+            }
+        } finally {
+            connection.disconnect()
+        }
+    } catch (_: Exception) {
+        null
+    }
+}
+
+private fun fetchThreads(baseUrl: String, token: String): List<ThreadSummary>? {
+    return try {
+        val connection = URI.create("$baseUrl/api/v1/threads").toURL().openConnection() as HttpURLConnection
+        connection.requestMethod = "GET"
+        connection.setRequestProperty("Authorization", "Bearer $token")
+        connection.connectTimeout = 3000
+        connection.readTimeout = 10000
+        try {
+            if (connection.responseCode != 200) {
+                null
+            } else {
+                val root = Json
+                    .parseToJsonElement(connection.inputStream.bufferedReader().readText())
+                    .jsonObject
+                root["threads"]?.jsonArray?.mapNotNull { element ->
+                    val item = element.jsonObject
+                    val id = item["id"]?.jsonPrimitive?.contentOrNull
+                        ?: return@mapNotNull null
+                    ThreadSummary(
+                        id = id,
+                        title = item["title"]?.jsonPrimitive?.contentOrNull ?: "",
+                        updatedAt = item["updated_at"]?.jsonPrimitive?.contentOrNull ?: "",
+                        messageCount = item["message_count"]?.jsonPrimitive?.intOrNull ?: 0,
+                    )
+                }
+            }
+        } finally {
+            connection.disconnect()
+        }
+    } catch (_: Exception) {
+        null
+    }
+}
+
+private fun fetchThreadMessages(
+    baseUrl: String,
+    token: String,
+    threadId: String,
+): List<StoredMessage>? {
+    return try {
+        val connection = URI.create("$baseUrl/api/v1/threads/$threadId")
+            .toURL().openConnection() as HttpURLConnection
+        connection.requestMethod = "GET"
+        connection.setRequestProperty("Authorization", "Bearer $token")
+        connection.connectTimeout = 3000
+        connection.readTimeout = 15000
+        try {
+            if (connection.responseCode != 200) {
+                null
+            } else {
+                val root = Json
+                    .parseToJsonElement(connection.inputStream.bufferedReader().readText())
+                    .jsonObject
+                val thread = root["thread"]?.jsonObject ?: return null
+                thread["messages"]?.jsonArray?.mapNotNull { element ->
+                    val item = element.jsonObject
+                    val role = item["role"]?.jsonPrimitive?.contentOrNull
+                        ?: return@mapNotNull null
+                    val content = item["content"]?.jsonPrimitive?.contentOrNull ?: ""
+                    StoredMessage(
+                        id = item["id"]?.jsonPrimitive?.contentOrNull
+                            ?: GridAgentClient.newId("msg"),
+                        role = role,
+                        content = content,
+                    )
+                }
             }
         } finally {
             connection.disconnect()

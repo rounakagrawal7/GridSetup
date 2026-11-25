@@ -292,6 +292,19 @@ class APITestCase(unittest.TestCase):
         ).json()
         self.assertEqual(detail["thread"]["messages"][-1]["role"], "assistant")
         self.assertIn("remember this", detail["thread"]["messages"][-1]["content"])
+        self._events(
+            {
+                "threadId": "thr_persist",
+                "messages": [{"id": "m2", "role": "user", "content": "second turn"}],
+            }
+        )
+        detail = requests.get(
+            f"{self.base}/threads/thr_persist", headers=self.headers
+        ).json()
+        messages = detail["thread"]["messages"]
+        self.assertEqual(len(messages), 4)
+        self.assertEqual(messages[0]["content"], "remember this")
+        self.assertEqual(messages[2]["content"], "second turn")
 
     def test_tool_result_is_not_duplicated_as_text(self):
         saved_registry = dict(Tools.registry)

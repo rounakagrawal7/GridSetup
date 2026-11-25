@@ -224,6 +224,8 @@ Landed:
 - Desktop first-run setup and provider switching: `GET/POST /api/v1/provider`
   plus `POST /api/v1/provider/models`, with Ollama, LM Studio, OpenRouter and
   OpenAI. The desktop can write `config.json` and start the local host.
+- Thread replay: `/api/v1/agent` appends each turn to the thread store, and the
+  desktop sidebar lists persisted threads and reloads their messages.
 
 Still open:
 

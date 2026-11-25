@@ -62,6 +62,9 @@
   its model field is a dropdown that auto-loads the provider's available models.
   `GET/POST /api/v1/provider` and `POST /api/v1/provider/models` back it.
 - Native OpenAI backend support alongside Ollama, LM Studio and OpenRouter.
+- Desktop thread history: the API now appends each turn to a thread instead of
+  replacing it, and the sidebar HISTORY list reloads persisted conversations
+  with one click.
 - Forced `kotlinx-datetime` 0.6.2 on the desktop runtime because the AG-UI SDK
   still calls `Clock.System`, while Compose Material3 1.9 resolves 0.7.x.
 - Android companion: `androidApp` uses the Android-KMP library plugin in
