@@ -18,6 +18,7 @@ import json
 import os
 import re
 import secrets
+import socket
 import sys
 import threading
 import time
@@ -35,6 +36,9 @@ RUN_DIR = HERE / "run"
 REFS_REA = HERE / "refs" / "rea"
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = int(os.environ.get("GRID_API_PORT", "8771"))
+DISCOVERY_PORT = int(os.environ.get("GRID_DISCOVERY_PORT", "8772"))
+PAIR_TTL_SECONDS = 900
+PAIR_MAX_ATTEMPTS = 5
 DEFAULT_TOKEN_FILE = RUN_DIR / "api_token"
 DEFAULT_THREAD_FILE = RUN_DIR / "api_threads.json"
 PROTOCOL_VERSION = "1.0"
@@ -263,6 +267,125 @@ class _QuietHTTPServer(ThreadingHTTPServer):
         super().handle_error(request, client_address)
 
 
+class PairingManager:
+    """Short-lived, one-time codes for pairing a LAN client."""
+
+    def __init__(
+        self,
+        ttl: int = PAIR_TTL_SECONDS,
+        max_attempts: int = PAIR_MAX_ATTEMPTS,
+    ):
+        self.ttl = int(ttl)
+        self.max_attempts = int(max_attempts)
+        self._lock = threading.Lock()
+        self._code = self._new_code()
+        self._expires_at = time.time() + self.ttl
+        self._attempts: Dict[str, int] = {}
+
+    @staticmethod
+    def _new_code() -> str:
+        return f"{secrets.randbelow(1_000_000):06d}"
+
+    def _rotate_locked(self) -> None:
+        self._code = self._new_code()
+        self._expires_at = time.time() + self.ttl
+        self._attempts = {}
+
+    def _status_locked(self) -> Dict[str, Any]:
+        return {
+            "code": self._code,
+            "expires_in": max(0, int(self._expires_at - time.time())),
+            "ttl": self.ttl,
+        }
+
+    def status(self) -> Dict[str, Any]:
+        with self._lock:
+            if time.time() >= self._expires_at:
+                self._rotate_locked()
+            return self._status_locked()
+
+    def rotate(self) -> Dict[str, Any]:
+        with self._lock:
+            self._rotate_locked()
+            return self._status_locked()
+
+    def validate(self, raw_code: str, client_ip: str) -> Tuple[bool, str, int]:
+        code = re.sub(r"\D", "", str(raw_code or ""))[:6]
+        ip = client_ip or "unknown"
+        with self._lock:
+            if time.time() >= self._expires_at:
+                self._rotate_locked()
+                return False, "pairing code expired; show a new code on the host", 410
+            attempts = self._attempts.get(ip, 0)
+            if attempts >= self.max_attempts:
+                return False, "too many pairing attempts; show a new code on the host", 429
+            if len(code) != 6 or not hmac.compare_digest(code, self._code):
+                self._attempts[ip] = attempts + 1
+                return False, "invalid pairing code", 401
+            self._rotate_locked()
+            return True, "", 200
+
+
+class DiscoveryResponder(threading.Thread):
+    """Answers GRID_DISCOVER UDP broadcasts so clients can find the host."""
+
+    def __init__(
+        self,
+        api_port: int,
+        port: int = DISCOVERY_PORT,
+        device_name: str = "",
+    ):
+        super().__init__(name="grid-discovery", daemon=True)
+        self.api_port = int(api_port)
+        self.port = int(port)
+        self.device_name = device_name or socket.gethostname()
+        self._stop = threading.Event()
+        self._sock: Optional[socket.socket] = None
+
+    def run(self) -> None:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self._sock = sock
+        try:
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            sock.bind(("0.0.0.0", self.port))
+            sock.settimeout(1.0)
+            while not self._stop.is_set():
+                try:
+                    data, addr = sock.recvfrom(512)
+                except socket.timeout:
+                    continue
+                except OSError:
+                    break
+                if data.strip().upper() != b"GRID_DISCOVER":
+                    continue
+                payload = json.dumps(
+                    {
+                        "grid": 1,
+                        "name": self.device_name,
+                        "port": self.api_port,
+                        "protocol": PROTOCOL_VERSION,
+                    }
+                ).encode("utf-8")
+                try:
+                    sock.sendto(payload, addr)
+                except OSError:
+                    pass
+        finally:
+            try:
+                sock.close()
+            except OSError:
+                pass
+
+    def stop(self) -> None:
+        self._stop.set()
+        sock = self._sock
+        if sock is not None:
+            try:
+                sock.close()
+            except OSError:
+                pass
+
+
 class GridAPIServer:
     """AG-UI HTTP server bound to loopback by default."""
 
@@ -284,6 +407,8 @@ class GridAPIServer:
         self.port = int(port)
         self.threads = thread_store or ThreadStore()
         self.refs_dir = Path(refs_dir) if refs_dir else REFS_REA
+        self.pairing = PairingManager()
+        self._discovery: Optional[DiscoveryResponder] = None
         self._httpd = None
         self._thread = None
         self._approvals_lock = threading.Lock()
@@ -304,6 +429,35 @@ class GridAPIServer:
             "threads": len(self.threads.summaries()),
             "rea_reports": len(self._rea_reports()),
             "runtime": getattr(self.runtime, "__name__", ""),
+        }
+
+    def _lan_ip(self) -> str:
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            try:
+                sock.connect(("8.8.8.8", 80))
+                return sock.getsockname()[0]
+            finally:
+                sock.close()
+        except OSError:
+            return "127.0.0.1"
+
+    def _pair_device(
+        self,
+        body: Dict[str, Any],
+        client_ip: str,
+    ) -> Tuple[int, Dict[str, Any]]:
+        ok, error, status = self.pairing.validate(
+            str(body.get("code") or ""),
+            client_ip,
+        )
+        if not ok:
+            return status, {"ok": False, "error": error}
+        return 200, {
+            "ok": True,
+            "token": self.token,
+            "protocol": PROTOCOL_VERSION,
+            "message": "Paired with GRID",
         }
 
     def _model_info(self) -> Dict[str, Any]:
@@ -889,6 +1043,16 @@ class GridAPIServer:
         )
         return "\n".join(lines)
 
+    def _cmd_pair(self, _args: str) -> str:
+        status = self.pairing.status()
+        url = f"http://{self._lan_ip()}:{self.port}"
+        return (
+            "Pair an Android device:\n"
+            f"  Host URL: {url}\n"
+            f"  Code: {status['code']}  (valid {status['expires_in']}s)\n"
+            "On the phone: Find GRID -> choose this host -> enter the code."
+        )
+
     def _cmd_help(self, _args: str) -> str:
         return (
             "Local commands:\n"
@@ -897,6 +1061,7 @@ class GridAPIServer:
             "  /model             = active model and available models\n"
             "  /tokens            = session token and timing stats\n"
             "  /tools             = list every GRID tool\n"
+            "  /pair              = host URL + code to pair the Android app\n"
             "  /tool <name> <in>  = run a tool through the agent\n"
             "  /rea authorized <url> = authorized passive teardown\n"
             "  /memory ...        = recall, add, profile, backfill\n"
@@ -943,6 +1108,7 @@ class GridAPIServer:
             "/export": self._cmd_export,
             "/model": self._cmd_model,
             "/tools": self._cmd_tools,
+            "/pair": self._cmd_pair,
         }
         handler = handlers.get(name)
         if handler is None:
@@ -1334,6 +1500,16 @@ class GridAPIServer:
                     server._json(self, 200, server._model_info())
                 elif path == "/api/v1/provider":
                     server._json(self, 200, server._provider_info())
+                elif path == "/api/v1/pair/code":
+                    server._json(
+                        self,
+                        200,
+                        {
+                            "ok": True,
+                            "url": f"http://{server._lan_ip()}:{server.port}",
+                            **server.pairing.status(),
+                        },
+                    )
                 elif path == "/api/v1/ui/catalog":
                     from grid_ui import catalog
 
@@ -1388,10 +1564,15 @@ class GridAPIServer:
                     server._json(self, 404, {"ok": False, "error": "not found"})
 
             def do_POST(self):
+                path = urlparse(self.path).path.rstrip("/")
+                if path == "/api/v1/pair":
+                    body = self._read_json()
+                    code, payload = server._pair_device(body, self.client_address[0])
+                    server._json(self, code, payload)
+                    return
                 if not self._authorized():
                     server._json(self, 401, {"ok": False, "error": "unauthorized"})
                     return
-                path = urlparse(self.path).path.rstrip("/")
                 if path == "/api/v1/agent":
                     body = self._read_json()
                     if not body:
@@ -1413,6 +1594,13 @@ class GridAPIServer:
                     return
                 if path == "/api/v1/threads/clear":
                     server._json(self, 200, server._clear_threads())
+                    return
+                if path == "/api/v1/pair/rotate":
+                    server._json(
+                        self,
+                        200,
+                        {"ok": True, **server.pairing.rotate()},
+                    )
                     return
                 if path == "/api/v1/ui/action":
                     body = self._read_json()
@@ -1472,9 +1660,15 @@ class GridAPIServer:
             target=self._httpd.serve_forever, name="grid-api-http", daemon=True
         )
         self._thread.start()
+        if self.host not in ("127.0.0.1", "localhost", "::1"):
+            self._discovery = DiscoveryResponder(self.port)
+            self._discovery.start()
         return True
 
     def stop(self) -> None:
+        if self._discovery is not None:
+            self._discovery.stop()
+            self._discovery = None
         if self._httpd is not None:
             try:
                 self._httpd.shutdown()
@@ -1526,6 +1720,12 @@ def run_api(orchestrator, console, config: Optional[Dict[str, Any]] = None, tool
         f"  GRID API listening on [bold]http://{host}:{server.port}/api/v1[/]\n"
         f"  AG-UI protocol {PROTOCOL_VERSION}; token file: [dim]{token_file}[/]"
     )
+    if host not in ("127.0.0.1", "localhost", "::1"):
+        pair = server.pairing.status()
+        console.print(
+            f"  Pair phone: [bold]http://{server._lan_ip()}:{server.port}[/] "
+            f"code [bold]{pair['code']}[/] (valid {pair['ttl']}s)"
+        )
     try:
         while not server.shutdown_event.wait(1.0):
             pass

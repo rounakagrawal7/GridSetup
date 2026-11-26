@@ -32,7 +32,7 @@ internal data class SlashPalette(
 internal val SERVER_COMMANDS = setOf(
     "/memory", "/life", "/rea", "/plan", "/ref", "/jobs", "/persona", "/social",
     "/pb", "/export", "/save", "/comms", "/ctf", "/game", "/gcal", "/gsheet",
-    "/model", "/tools",
+    "/model", "/tools", "/pair",
 )
 
 /**
@@ -47,6 +47,7 @@ internal val APP_COMMANDS = listOf(
     SlashCommand("/settings", "Change the host or token"),
     SlashCommand("/model", "Show the active and available models"),
     SlashCommand("/tools", "List every GRID tool"),
+    SlashCommand("/pair", "Show the phone pairing code and LAN URL"),
     SlashCommand("/tool", "Run a tool: /tool <name> <input>", template = "/tool "),
     SlashCommand(
         "/rea",

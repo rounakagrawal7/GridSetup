@@ -479,6 +479,9 @@ Endpoints:
 | `GET` | `/api/v1/ui/catalog` | locked server-driven UI component catalog |
 | `POST` | `/api/v1/ui/action` | submit a rendered form/button action |
 | `POST` | `/api/v1/command` | run a terminal-style local command (`/memory`, `/life`, `/plan`, `/jobs`, ...) |
+| `POST` | `/api/v1/pair` | redeem a 6-digit pairing code for the host token (no bearer; rate-limited) |
+| `GET` | `/api/v1/pair/code` | current pairing code + LAN URL (auth required) |
+| `POST` | `/api/v1/pair/rotate` | issue a fresh pairing code (auth required) |
 | `POST` | `/api/v1/shutdown` | save memory and stop the API host |
 | `GET` | `/api/v1/threads` | thread summaries |
 | `POST` | `/api/v1/threads/clear` | delete saved threads only (memory/persona untouched) |
@@ -490,6 +493,8 @@ Endpoints:
 | `GET` | `/api/v1/rea/reports/<id>/screenshot` | PNG preview |
 
 The stream follows AG-UI 1.0: `RUN_STARTED`, `STEP_STARTED`, `TEXT_MESSAGE_*`, `TOOL_CALL_*`, `ACTIVITY_*`, `CUSTOM`, `STEP_FINISHED`, `RUN_FINISHED`. Dangerous tools emit `CUSTOM grid.approval_required` and wait for the approval endpoint. REA results emit `CUSTOM grid.artifact` with the report path.
+
+LAN discovery: when the host listens on a LAN interface it answers `GRID_DISCOVER` UDP broadcasts on port **8772**. The Android client uses the packet's source address plus the advertised port, so the user never has to type the LAN IP.
 
 Config:
 
@@ -602,15 +607,22 @@ cd clients
 adb install -r androidApp\build\outputs\apk\debug\androidApp-debug.apk
 ```
 
-On first launch, enter the host URL and paste `run/api_token`. The token is encrypted with an Android Keystore AES/GCM key.
+On first launch, pair the phone instead of copying a secret:
+
+1. Start the host on the LAN (`api.host` set to `0.0.0.0`).
+2. On the PC, run `.\pair.ps1`. It prints the host URL and a 6-digit code valid for 15 minutes.
+3. On the phone, tap **Find GRID on Wi-Fi** (or type the URL), select the host, enter the code, and tap **Pair**.
+
+The app stores the host token encrypted with an Android Keystore AES/GCM key. The code is one-time and rate-limited; pair only on a trusted LAN. Manual token entry remains under **OR PASTE THE API TOKEN** as a fallback.
 
 - Type `/` for command autocomplete. Choosing a command opens its subcommands; tap either to insert it into the composer with the caret at the end.
 - Slash commands execute on the host through `POST /api/v1/command` — for example `/memory status`, `/rea status`, `/pb status`, `/model` and `/tools`.
 - The header shows the active model and provider plus a session token meter. Tap the model line to open **Model & provider** and switch either one.
 - **History** lists saved host threads, including the ones from before you started a new thread. Tap one to replay text and tool cards.
 - Every user, assistant, tool and system message has a **Copy** button.
+- Discovery uses a UDP broadcast on port **8772**; allow it through the firewall if the phone cannot find the host.
 - Emulator URL: `http://10.0.2.2:8771`
-- Physical device: set `api.host` to `0.0.0.0` in `config.json`, restart `--api`, and use `http://<computer-LAN-IP>:8771`.
+- Phone URL: `http://<computer-LAN-IP>:8771` (host must listen on `0.0.0.0`).
 - LAN exposure should be token-protected; cleartext HTTP is allowed in this development build.
 
 #### Build details
@@ -896,7 +908,7 @@ cd clients
 .\gradlew.bat :shared:jvmTest :desktopApp:compileKotlin :androidApp:assembleDebug :androidApp:testDebugUnitTest
 ```
 
-Current suite: **160 tests**, **9 Android palette tests**, **51/51 routing evals**, desktop compile, Android debug APK, and an Android emulator smoke test (Pixel 8, API 36) covering first-run setup, health check, streaming chat, tool cards, command/subcommand autocomplete, server-command routing, new-thread reset and token persistence across an app restart.
+Current suite: **167 tests**, **14 Android tests**, **51/51 routing evals**, desktop compile, Android debug APK, and an Android emulator smoke test (Pixel 8, API 36) covering pairing, LAN discovery formatting, first-run setup, health check, streaming chat, tool cards, command/subcommand autocomplete, server-command routing, new-thread reset, history replay, model switching, copy buttons, the token meter and token persistence across an app restart.
 
 ## Documentation
 

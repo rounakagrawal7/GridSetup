@@ -2,6 +2,7 @@ package ai.grid.android
 
 import ai.grid.shared.GridAgentClient
 import ai.grid.shared.GridEvent
+import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -59,12 +60,14 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextOverflow
@@ -145,6 +148,52 @@ private fun SetupScreen(
 ) {
     var url by remember { mutableStateOf(initialUrl) }
     var token by remember { mutableStateOf(initialToken) }
+    val scope = rememberCoroutineScope()
+    val context = LocalContext.current
+    var discovered by remember { mutableStateOf<List<DiscoveredHost>>(emptyList()) }
+    var scanning by remember { mutableStateOf(false) }
+    var scanError by remember { mutableStateOf<String?>(null) }
+    var pairCode by remember { mutableStateOf("") }
+    var pairing by remember { mutableStateOf(false) }
+    var pairError by remember { mutableStateOf<String?>(null) }
+
+    fun findHosts() {
+        if (scanning) return
+        scanning = true
+        scanError = null
+        scope.launch {
+            discovered = withContext(Dispatchers.IO) { discoverHosts(context) }
+            scanning = false
+            if (discovered.size == 1) {
+                url = discovered.first().url
+            }
+            if (discovered.isEmpty()) {
+                scanError =
+                    "No GRID host found. Start the host and keep the phone on the same Wi-Fi."
+            }
+        }
+    }
+
+    fun pair() {
+        if (pairing) return
+        pairing = true
+        pairError = null
+        scope.launch {
+            try {
+                val host = normalizeBaseUrl(url)
+                val newToken = withContext(Dispatchers.IO) {
+                    pairWithCode(host, pairCode, Build.MODEL)
+                }
+                url = host
+                token = newToken
+                onConnect(host, newToken)
+            } catch (error: Exception) {
+                pairError = error.message ?: "Pairing failed."
+            } finally {
+                pairing = false
+            }
+        }
+    }
 
     Column(
         Modifier
@@ -169,15 +218,104 @@ private fun SetupScreen(
             singleLine = true,
             placeholder = { Text(TokenStore.DEFAULT_URL) },
         )
+        OutlinedButton(
+            onClick = { findHosts() },
+            enabled = !scanning,
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            if (scanning) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(14.dp),
+                    color = GridGreen,
+                    strokeWidth = 2.dp,
+                )
+                Spacer(Modifier.width(8.dp))
+            }
+            Text(if (scanning) "Searching the LAN…" else "Find GRID on Wi-Fi")
+        }
+        scanError?.let {
+            Text(it, color = Warning, fontSize = 11.sp)
+        }
+        discovered.forEach { host ->
+            Surface(
+                color = PanelRaised,
+                shape = RoundedCornerShape(8.dp),
+                modifier = Modifier.fillMaxWidth().clickable { url = host.url },
+            ) {
+                Row(
+                    Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text(host.name, color = Color.White, fontSize = 13.sp)
+                        Text(
+                            host.url,
+                            color = GridGreenDim,
+                            fontSize = 10.sp,
+                            fontFamily = FontFamily.Monospace,
+                        )
+                    }
+                    Text("Use", color = GridGreen, fontSize = 11.sp)
+                }
+            }
+        }
         Text(
-            "Emulator: http://10.0.2.2:8771\n" +
-                "Phone: http://<computer-LAN-IP>:8771 (host must listen on 0.0.0.0)\n" +
-                "Clear this field before pasting a new URL.",
+            "No URL? Tap Find GRID. Emulator uses http://10.0.2.2:8771.",
             color = Muted,
             fontSize = 11.sp,
         )
 
-        Text("API TOKEN", color = Muted, fontSize = 11.sp)
+        HorizontalDivider(color = PanelRaised, modifier = Modifier.padding(vertical = 4.dp))
+
+        Text("PAIR WITH CODE", color = Muted, fontSize = 11.sp)
+        Text(
+            "Run /pair on the host (desktop chat or terminal) for a 6-digit code.",
+            color = Muted,
+            fontSize = 11.sp,
+        )
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            OutlinedTextField(
+                value = pairCode,
+                onValueChange = { pairCode = normalizePairingCode(it) },
+                modifier = Modifier.weight(1f),
+                singleLine = true,
+                placeholder = { Text("000000", color = Muted) },
+                keyboardOptions = KeyboardOptions(
+                    keyboardType = KeyboardType.Number,
+                    imeAction = ImeAction.Done,
+                ),
+                keyboardActions = KeyboardActions(onDone = { pair() }),
+            )
+            Spacer(Modifier.width(8.dp))
+            Button(
+                onClick = { pair() },
+                enabled = !pairing && url.isNotBlank() && pairCode.length == 6,
+                colors = ButtonDefaults.buttonColors(containerColor = GridGreen, contentColor = Color.Black),
+                modifier = Modifier.height(56.dp),
+            ) {
+                if (pairing) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(18.dp),
+                        color = Color.Black,
+                        strokeWidth = 2.dp,
+                    )
+                } else {
+                    Text("Pair")
+                }
+            }
+        }
+        pairError?.let {
+            Text(it, color = Danger, fontSize = 11.sp)
+        }
+        Text(
+            "After pairing, the host token is stored encrypted with the Android Keystore.",
+            color = Muted,
+            fontSize = 11.sp,
+        )
+
+        HorizontalDivider(color = PanelRaised, modifier = Modifier.padding(vertical = 4.dp))
+
+        Text("OR PASTE THE API TOKEN", color = Muted, fontSize = 11.sp)
         OutlinedTextField(
             value = token,
             onValueChange = { token = it },
@@ -187,19 +325,19 @@ private fun SetupScreen(
             placeholder = { Text("paste run/api_token") },
         )
         Text(
-            "The token is stored encrypted with the Android Keystore.",
+            "Use this only if the host shows the token directly.",
             color = Muted,
             fontSize = 11.sp,
         )
 
-        Spacer(Modifier.height(8.dp))
+        Spacer(Modifier.height(4.dp))
         Button(
             onClick = { onConnect(url, token.trim()) },
             enabled = url.isNotBlank() && token.isNotBlank(),
-            colors = ButtonDefaults.buttonColors(containerColor = GridGreen, contentColor = Color.Black),
+            colors = ButtonDefaults.buttonColors(containerColor = PanelRaised, contentColor = GridGreen),
             modifier = Modifier.fillMaxWidth(),
         ) {
-            Text("Connect to GRID")
+            Text("Connect with token")
         }
         Text(
             "Start the host first:\npython grid_agent.py --api --no-input",

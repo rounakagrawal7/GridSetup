@@ -1,6 +1,8 @@
 import json
+import socket
 import tempfile
 import threading
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -8,7 +10,7 @@ from unittest import mock
 import requests
 
 import grid_agent
-from grid_api import GridAPIServer, ThreadStore
+from grid_api import DiscoveryResponder, GridAPIServer, PairingManager, ThreadStore
 from grid_agent import Tools
 
 
@@ -561,6 +563,126 @@ class ToolEventTests(unittest.TestCase):
         result = Tools.safe_execute("fake_echo", "hello")
         self.assertIn("[Blocked]", result)
         self.assertIsNone(Tools.policy)
+
+
+class PairingTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        self.orch = FakeOrchestrator()
+        self.server = GridAPIServer(
+            self.orch,
+            config={"permissions": {"mode": "read_only"}},
+            token="test-token",
+            host="127.0.0.1",
+            port=0,
+            thread_store=ThreadStore(self.root / "threads.json"),
+            refs_dir=self.root / "rea",
+        )
+        self.assertTrue(self.server.start())
+        self.base = f"http://127.0.0.1:{self.server.port}/api/v1"
+        self.headers = {"Authorization": "Bearer test-token"}
+
+    def tearDown(self):
+        self.server.stop()
+        self.tmp.cleanup()
+
+    def _wrong_code(self) -> str:
+        code = self.server.pairing.status()["code"]
+        return "000000" if code != "000000" else "111111"
+
+    def test_pair_endpoint_is_public_but_rate_limited(self):
+        response = requests.post(
+            f"{self.base}/pair",
+            json={"code": self._wrong_code()},
+            timeout=5,
+        )
+        self.assertEqual(response.status_code, 401)
+
+    def test_pair_with_code_returns_token_and_is_one_time(self):
+        code = self.server.pairing.status()["code"]
+        response = requests.post(f"{self.base}/pair", json={"code": code}, timeout=5)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["token"], "test-token")
+
+        replay = requests.post(f"{self.base}/pair", json={"code": code}, timeout=5)
+        self.assertEqual(replay.status_code, 401)
+
+    def test_pair_code_accepts_spaces_and_hyphens(self):
+        code = self.server.pairing.status()["code"]
+        spaced = f"{code[:3]}-{code[3:]}"
+        response = requests.post(f"{self.base}/pair", json={"code": spaced}, timeout=5)
+        self.assertEqual(response.status_code, 200)
+
+    def test_pair_code_endpoint_requires_auth(self):
+        self.assertEqual(
+            requests.get(f"{self.base}/pair/code", timeout=5).status_code,
+            401,
+        )
+        response = requests.get(f"{self.base}/pair/code", headers=self.headers, timeout=5)
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(len(payload["code"]), 6)
+        self.assertIn(str(self.server.port), payload["url"])
+
+    def test_rotate_endpoint_requires_auth(self):
+        self.assertEqual(
+            requests.post(f"{self.base}/pair/rotate", timeout=5).status_code,
+            401,
+        )
+        response = requests.post(
+            f"{self.base}/pair/rotate",
+            headers=self.headers,
+            timeout=5,
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(response.json()["code"]), 6)
+
+    def test_pairing_manager_expiry_and_attempt_limit(self):
+        manager = PairingManager(ttl=60, max_attempts=2)
+        code = manager.status()["code"]
+        wrong = "000000" if code != "000000" else "111111"
+        first = manager.validate(wrong, "10.0.0.2")
+        self.assertEqual(first[2], 401)
+        second = manager.validate(wrong, "10.0.0.2")
+        self.assertEqual(second[2], 401)
+        limited = manager.validate(wrong, "10.0.0.2")
+        self.assertEqual(limited[2], 429)
+        other_ip = manager.validate(wrong, "10.0.0.3")
+        self.assertEqual(other_ip[2], 401)
+
+        manager._expires_at = 0
+        expired = manager.validate(code, "10.0.0.4")
+        self.assertFalse(expired[0])
+        self.assertEqual(expired[2], 410)
+
+
+class DiscoveryTests(unittest.TestCase):
+    def test_discovery_responds_with_host_port(self):
+        probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]
+        probe.close()
+
+        responder = DiscoveryResponder(
+            api_port=8771,
+            port=port,
+            device_name="test-grid",
+        )
+        responder.start()
+        client = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        client.settimeout(3)
+        try:
+            time.sleep(0.1)
+            client.sendto(b"GRID_DISCOVER", ("127.0.0.1", port))
+            data, _ = client.recvfrom(1024)
+            payload = json.loads(data.decode("utf-8"))
+            self.assertEqual(payload["port"], 8771)
+            self.assertEqual(payload["name"], "test-grid")
+            self.assertEqual(payload["grid"], 1)
+        finally:
+            client.close()
+            responder.stop()
 
 
 if __name__ == "__main__":

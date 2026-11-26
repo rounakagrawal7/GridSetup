@@ -166,6 +166,7 @@ private val SLASH_COMMANDS = listOf(
         template = "/rea authorized ",
     ),
     SlashCommand("/tools", "List every GRID tool"),
+    SlashCommand("/pair", "Show the phone pairing code and LAN URL"),
     SlashCommand("/tool", "Run a tool: /tool <name> <input>", template = "/tool "),
     SlashCommand(
         "/memory",
@@ -244,6 +245,7 @@ private val SLASH_COMMANDS = listOf(
 private val SERVER_COMMANDS = setOf(
     "/memory", "/life", "/plan", "/ref", "/jobs", "/persona", "/social",
     "/pb", "/export", "/save", "/comms", "/ctf", "/game", "/gcal", "/gsheet",
+    "/pair",
 )
 
 private sealed interface Item {

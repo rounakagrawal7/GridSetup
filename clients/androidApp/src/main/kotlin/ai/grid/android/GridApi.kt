@@ -1,9 +1,23 @@
 package ai.grid.android
 
+import android.content.Context
+import android.net.wifi.WifiManager
+import java.net.DatagramPacket
+import java.net.DatagramSocket
 import java.net.HttpURLConnection
+import java.net.InetAddress
+import java.net.SocketTimeoutException
 import java.net.URL
 import java.net.URLEncoder
 import org.json.JSONObject
+
+private const val DISCOVERY_PORT = 8772
+
+internal data class DiscoveredHost(
+    val name: String,
+    val url: String,
+    val protocol: String,
+)
 
 internal data class ThreadSummary(
     val id: String,
@@ -38,6 +52,75 @@ internal data class ProviderInfo(
     val baseUrl: String,
     val providers: List<ProviderOption>,
 )
+
+internal fun normalizePairingCode(raw: String): String =
+    raw.filter { it.isDigit() }.take(6)
+
+/** Broadcasts GRID_DISCOVER and collects hosts that answer on the LAN. */
+internal fun discoverHosts(context: Context, timeoutMs: Int = 1800): List<DiscoveredHost> {
+    val wifi = context.applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
+    val lock = runCatching {
+        wifi?.createMulticastLock("grid-discovery")?.apply {
+            setReferenceCounted(false)
+            acquire()
+        }
+    }.getOrNull()
+    val results = linkedMapOf<String, DiscoveredHost>()
+    val socket = DatagramSocket()
+    try {
+        socket.broadcast = true
+        socket.soTimeout = 300
+        val payload = "GRID_DISCOVER".toByteArray(Charsets.UTF_8)
+        val broadcast = InetAddress.getByName("255.255.255.255")
+        socket.send(DatagramPacket(payload, payload.size, broadcast, DISCOVERY_PORT))
+        val deadline = System.currentTimeMillis() + timeoutMs
+        while (System.currentTimeMillis() < deadline) {
+            val buffer = ByteArray(1024)
+            val packet = DatagramPacket(buffer, buffer.size)
+            try {
+                socket.receive(packet)
+            } catch (_: SocketTimeoutException) {
+                continue
+            }
+            val text = String(packet.data, 0, packet.length, Charsets.UTF_8)
+            val json = runCatching { JSONObject(text) }.getOrNull() ?: continue
+            if (json.optInt("grid") != 1) continue
+            val ip = packet.address?.hostAddress ?: continue
+            val url = "http://$ip:${json.optInt("port", 8771)}"
+            results[url] = DiscoveredHost(
+                name = json.optString("name").ifBlank { ip },
+                url = url,
+                protocol = json.optString("protocol"),
+            )
+        }
+    } finally {
+        try {
+            socket.close()
+        } catch (_: Exception) {
+        }
+        try {
+            lock?.release()
+        } catch (_: Exception) {
+        }
+    }
+    return results.values.sortedBy { it.name.lowercase() }
+}
+
+/** Redeems a short pairing code for the host API token. */
+internal fun pairWithCode(baseUrl: String, rawCode: String, device: String): String {
+    val code = normalizePairingCode(rawCode)
+    if (code.length != 6) {
+        throw IllegalArgumentException("Enter the 6-digit code shown on the host.")
+    }
+    val root = postJson(
+        baseUrl = baseUrl,
+        token = "",
+        path = "/api/v1/pair",
+        body = JSONObject().put("code", code).put("device", device),
+    )
+    return root.optString("token").takeIf { it.isNotBlank() }
+        ?: throw IllegalStateException("The host did not return a token.")
+}
 
 internal fun normalizeBaseUrl(raw: String): String {
     var value = raw.filterNot { it.isWhitespace() }
@@ -230,7 +313,9 @@ private fun postJson(
     val connection = URL("$baseUrl$path").openConnection() as HttpURLConnection
     connection.requestMethod = "POST"
     connection.doOutput = true
-    connection.setRequestProperty("Authorization", "Bearer $token")
+    if (token.isNotBlank()) {
+        connection.setRequestProperty("Authorization", "Bearer $token")
+    }
     connection.setRequestProperty("Content-Type", "application/json")
     connection.connectTimeout = 5000
     connection.readTimeout = 30000
