@@ -43,6 +43,9 @@ chk.txt
 # CTF sandbox artifacts
 ctf_range/
 
+# Local APK builds for device testing
+dist/
+
 # Game world state
 game_state/
 
