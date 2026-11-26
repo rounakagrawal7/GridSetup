@@ -68,7 +68,6 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
-import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -121,8 +120,8 @@ private fun GridRoot(store: TokenStore) {
 
     if (editing) {
         SetupScreen(
-            initialUrl = baseUrl,
-            initialToken = token,
+            canCancel = token.isNotBlank(),
+            onCancel = { editing = false },
             onConnect = { url, newToken ->
                 baseUrl = normalizeBaseUrl(url)
                 token = normalizeToken(newToken)
@@ -142,15 +141,14 @@ private fun GridRoot(store: TokenStore) {
 
 @Composable
 private fun SetupScreen(
-    initialUrl: String,
-    initialToken: String,
+    canCancel: Boolean,
+    onCancel: () -> Unit,
     onConnect: (String, String) -> Unit,
 ) {
-    var url by remember { mutableStateOf(initialUrl) }
-    var token by remember { mutableStateOf(initialToken) }
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
     var discovered by remember { mutableStateOf<List<DiscoveredHost>>(emptyList()) }
+    var selectedHost by remember { mutableStateOf<DiscoveredHost?>(null) }
     var scanning by remember { mutableStateOf(false) }
     var scanError by remember { mutableStateOf<String?>(null) }
     var pairCode by remember { mutableStateOf("") }
@@ -162,33 +160,34 @@ private fun SetupScreen(
         scanning = true
         scanError = null
         scope.launch {
-            discovered = withContext(Dispatchers.IO) {
+            val found = withContext(Dispatchers.IO) {
                 runCatching { discoverHosts(context) }.getOrDefault(emptyList())
             }
+            discovered = found
             scanning = false
-            if (discovered.size == 1) {
-                url = discovered.first().url
+            selectedHost = when {
+                found.size == 1 -> found.first()
+                selectedHost != null && found.any { it.url == selectedHost?.url } -> selectedHost
+                else -> null
             }
-            if (discovered.isEmpty()) {
+            if (found.isEmpty()) {
                 scanError =
-                    "No GRID host found. Start the host and keep the phone on the same Wi-Fi."
+                    "No GRID host found. Start the desktop app and keep both devices on the same Wi-Fi."
             }
         }
     }
 
     fun pair() {
+        val host = selectedHost ?: return
         if (pairing) return
         pairing = true
         pairError = null
         scope.launch {
             try {
-                val host = normalizeBaseUrl(url)
                 val newToken = withContext(Dispatchers.IO) {
-                    pairWithCode(host, pairCode, Build.MODEL)
+                    pairWithCode(host.url, pairCode, Build.MODEL)
                 }
-                url = host
-                token = newToken
-                onConnect(host, newToken)
+                onConnect(host.url, newToken)
             } catch (error: Exception) {
                 pairError = error.message ?: "Pairing failed."
             } finally {
@@ -196,6 +195,8 @@ private fun SetupScreen(
             }
         }
     }
+
+    LaunchedEffect(Unit) { findHosts() }
 
     Column(
         Modifier
@@ -212,140 +213,116 @@ private fun SetupScreen(
         Text("ANDROID COMPANION", color = Muted, fontSize = 11.sp, letterSpacing = 2.sp)
         Spacer(Modifier.height(12.dp))
 
-        Text("HOST URL", color = Muted, fontSize = 11.sp)
-        OutlinedTextField(
-            value = url,
-            onValueChange = { url = it },
-            modifier = Modifier.fillMaxWidth(),
-            singleLine = true,
-            placeholder = { Text(TokenStore.DEFAULT_URL) },
+        Text("PAIR WITH YOUR DESKTOP", color = GridGreen, fontSize = 11.sp, letterSpacing = 1.2.sp)
+        Text(
+            "1. Open GRID on the PC and click Pair phone.",
+            color = Muted,
+            fontSize = 12.sp,
         )
-        OutlinedButton(
-            onClick = { findHosts() },
-            enabled = !scanning,
-            modifier = Modifier.fillMaxWidth(),
-        ) {
-            if (scanning) {
+        Text(
+            "2. Keep this phone on the same Wi-Fi.",
+            color = Muted,
+            fontSize = 12.sp,
+        )
+
+        if (scanning) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
                 CircularProgressIndicator(
                     modifier = Modifier.size(14.dp),
                     color = GridGreen,
                     strokeWidth = 2.dp,
                 )
                 Spacer(Modifier.width(8.dp))
+                Text("Looking for GRID on your Wi-Fi…", color = GridGreenDim, fontSize = 12.sp)
             }
-            Text(if (scanning) "Searching the LAN…" else "Find GRID on Wi-Fi")
-        }
-        scanError?.let {
-            Text(it, color = Warning, fontSize = 11.sp)
-        }
-        discovered.forEach { host ->
-            Surface(
-                color = PanelRaised,
-                shape = RoundedCornerShape(8.dp),
-                modifier = Modifier.fillMaxWidth().clickable { url = host.url },
-            ) {
-                Row(
-                    Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
+        } else if (discovered.isEmpty()) {
+            Text(
+                scanError ?: "No GRID host found.",
+                color = Warning,
+                fontSize = 11.sp,
+            )
+            OutlinedButton(
+                onClick = { findHosts() },
+                modifier = Modifier.fillMaxWidth(),
+            ) { Text("Search again") }
+        } else {
+            Text("3. Choose your host", color = Muted, fontSize = 11.sp)
+            discovered.forEach { host ->
+                val selected = selectedHost?.url == host.url
+                Surface(
+                    color = if (selected) Color(0xFF173B27) else PanelRaised,
+                    shape = RoundedCornerShape(8.dp),
+                    modifier = Modifier.fillMaxWidth().clickable { selectedHost = host },
                 ) {
-                    Column(Modifier.weight(1f)) {
-                        Text(host.name, color = Color.White, fontSize = 13.sp)
+                    Row(
+                        Modifier.padding(horizontal = 10.dp, vertical = 9.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(host.name, color = Color.White, fontSize = 13.sp, modifier = Modifier.weight(1f))
                         Text(
-                            host.url,
-                            color = GridGreenDim,
+                            if (selected) "Selected" else "Select",
+                            color = if (selected) GridGreen else Muted,
                             fontSize = 10.sp,
-                            fontFamily = FontFamily.Monospace,
                         )
                     }
-                    Text("Use", color = GridGreen, fontSize = 11.sp)
                 }
             }
         }
-        Text(
-            "No URL? Tap Find GRID. Emulator uses http://10.0.2.2:8771.",
-            color = Muted,
-            fontSize = 11.sp,
-        )
 
-        HorizontalDivider(color = PanelRaised, modifier = Modifier.padding(vertical = 4.dp))
-
-        Text("PAIR WITH CODE", color = Muted, fontSize = 11.sp)
-        Text(
-            "Run /pair on the host (desktop chat or terminal) for a 6-digit code.",
-            color = Muted,
-            fontSize = 11.sp,
-        )
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            OutlinedTextField(
-                value = pairCode,
-                onValueChange = { pairCode = normalizePairingCode(it) },
-                modifier = Modifier.weight(1f),
-                singleLine = true,
-                placeholder = { Text("000000", color = Muted) },
-                keyboardOptions = KeyboardOptions(
-                    keyboardType = KeyboardType.Number,
-                    imeAction = ImeAction.Done,
-                ),
-                keyboardActions = KeyboardActions(onDone = { pair() }),
-            )
-            Spacer(Modifier.width(8.dp))
-            Button(
-                onClick = { pair() },
-                enabled = !pairing && url.isNotBlank() && pairCode.length == 6,
-                colors = ButtonDefaults.buttonColors(containerColor = GridGreen, contentColor = Color.Black),
-                modifier = Modifier.height(56.dp),
-            ) {
-                if (pairing) {
-                    CircularProgressIndicator(
-                        modifier = Modifier.size(18.dp),
-                        color = Color.Black,
-                        strokeWidth = 2.dp,
-                    )
-                } else {
-                    Text("Pair")
+        if (discovered.isNotEmpty()) {
+            HorizontalDivider(color = PanelRaised, modifier = Modifier.padding(vertical = 4.dp))
+            Text("4. Enter the 6-digit code", color = Muted, fontSize = 11.sp)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                OutlinedTextField(
+                    value = pairCode,
+                    onValueChange = { pairCode = normalizePairingCode(it) },
+                    modifier = Modifier.weight(1f),
+                    singleLine = true,
+                    placeholder = { Text("000000", color = Muted) },
+                    keyboardOptions = KeyboardOptions(
+                        keyboardType = KeyboardType.Number,
+                        imeAction = ImeAction.Done,
+                    ),
+                    keyboardActions = KeyboardActions(onDone = { pair() }),
+                )
+                Spacer(Modifier.width(8.dp))
+                Button(
+                    onClick = { pair() },
+                    enabled = !pairing && selectedHost != null && pairCode.length == 6,
+                    colors = ButtonDefaults.buttonColors(containerColor = GridGreen, contentColor = Color.Black),
+                    modifier = Modifier.height(56.dp),
+                ) {
+                    if (pairing) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(18.dp),
+                            color = Color.Black,
+                            strokeWidth = 2.dp,
+                        )
+                    } else {
+                        Text("Pair")
+                    }
                 }
             }
+            pairError?.let {
+                Text(it, color = Danger, fontSize = 11.sp)
+            }
         }
-        pairError?.let {
-            Text(it, color = Danger, fontSize = 11.sp)
-        }
+
         Text(
-            "After pairing, the host token is stored encrypted with the Android Keystore.",
+            "The code is in the desktop Pair phone dialog. It expires after 15 minutes.",
             color = Muted,
             fontSize = 11.sp,
         )
-
-        HorizontalDivider(color = PanelRaised, modifier = Modifier.padding(vertical = 4.dp))
-
-        Text("OR PASTE THE API TOKEN", color = Muted, fontSize = 11.sp)
-        OutlinedTextField(
-            value = token,
-            onValueChange = { token = it },
-            modifier = Modifier.fillMaxWidth(),
-            singleLine = true,
-            visualTransformation = PasswordVisualTransformation(),
-            placeholder = { Text("paste run/api_token") },
-        )
-        Text(
-            "Use this only if the host shows the token directly.",
-            color = Muted,
-            fontSize = 11.sp,
-        )
-
-        Spacer(Modifier.height(4.dp))
-        Button(
-            onClick = { onConnect(url, token.trim()) },
-            enabled = url.isNotBlank() && token.isNotBlank(),
-            colors = ButtonDefaults.buttonColors(containerColor = PanelRaised, contentColor = GridGreen),
-            modifier = Modifier.fillMaxWidth(),
-        ) {
-            Text("Connect with token")
+        if (canCancel) {
+            TextButton(
+                onClick = onCancel,
+                modifier = Modifier.fillMaxWidth(),
+            ) { Text("Cancel", color = Muted) }
         }
         Text(
-            "Start the host first:\npython grid_agent.py --api --no-input",
+            "Host not listed? Make sure the desktop is running and both devices are on the same network.",
             color = GridGreenDim,
-            fontSize = 12.sp,
-            fontFamily = FontFamily.Monospace,
+            fontSize = 11.sp,
         )
     }
 }
@@ -408,6 +385,54 @@ private fun ChatScreen(baseUrl: String, token: String, onSettings: () -> Unit) {
         if (items.isNotEmpty()) listState.animateScrollToItem(items.lastIndex)
     }
 
+    fun activityIndex(): Int = items.indexOfLast { it is Item.Activity }
+
+    fun addDuringRun(item: Item) {
+        val index = activityIndex()
+        if (index >= 0) items.add(index, item) else items.add(item)
+    }
+
+    fun updateActivity(transform: (Item.Activity) -> Item.Activity) {
+        val index = activityIndex()
+        if (index >= 0) {
+            items[index] = transform(items[index] as Item.Activity)
+        }
+    }
+
+    fun recordTool(name: String) {
+        updateActivity { activity ->
+            when (toolKind(name)) {
+                ToolKind.Command -> activity.copy(
+                    commands = activity.commands + 1,
+                    thoughts = activity.thoughts + 1,
+                )
+                ToolKind.Edit -> activity.copy(
+                    edits = activity.edits + 1,
+                    thoughts = activity.thoughts + 1,
+                )
+                ToolKind.Read -> activity.copy(
+                    reads = activity.reads + 1,
+                    thoughts = activity.thoughts + 1,
+                )
+                ToolKind.Tool -> activity.copy(
+                    tools = activity.tools + 1,
+                    thoughts = activity.thoughts + 1,
+                )
+            }
+        }
+    }
+
+    fun finishActivity() {
+        val index = activityIndex()
+        if (index < 0) return
+        val activity = items[index] as Item.Activity
+        if (activity.total == 0) {
+            items.removeAt(index)
+        } else if (activity.running) {
+            items[index] = activity.copy(running = false)
+        }
+    }
+
     fun handle(event: GridEvent) {
         when (event) {
             is GridEvent.RunStarted -> {
@@ -437,7 +462,10 @@ private fun ChatScreen(baseUrl: String, token: String, onSettings: () -> Unit) {
                 }
             }
             is GridEvent.MessageFinished -> Unit
-            is GridEvent.ToolStarted -> items.add(Item.Tool(event.callId, event.name, "", null))
+            is GridEvent.ToolStarted -> {
+                addDuringRun(Item.Tool(event.callId, event.name, "", null))
+                recordTool(event.name)
+            }
             is GridEvent.ToolArgs -> {
                 val index = items.indexOfLast { it is Item.Tool && it.callId == event.callId }
                 if (index >= 0) {
@@ -454,8 +482,8 @@ private fun ChatScreen(baseUrl: String, token: String, onSettings: () -> Unit) {
                 }
             }
             is GridEvent.Activity -> status = event.activityType
-            is GridEvent.Artifact -> items.add(Item.Artifact(event.path))
-            is GridEvent.ApprovalRequired -> items.add(
+            is GridEvent.Artifact -> addDuringRun(Item.Artifact(event.path))
+            is GridEvent.ApprovalRequired -> addDuringRun(
                 Item.Approval(
                     id = event.approvalId,
                     tool = event.tool,
@@ -464,6 +492,7 @@ private fun ChatScreen(baseUrl: String, token: String, onSettings: () -> Unit) {
                 )
             )
             is GridEvent.Stats -> {
+                finishActivity()
                 totalTokens += event.totalTokens
                 lastTokens = event.totalTokens
                 lastLatency = event.durationMs
@@ -487,11 +516,13 @@ private fun ChatScreen(baseUrl: String, token: String, onSettings: () -> Unit) {
             is GridEvent.Ui -> Unit
             is GridEvent.Custom -> Unit
             is GridEvent.RunFinished -> {
+                finishActivity()
                 status = "Ready"
                 currentAssistantId = null
                 pendingStats = null
             }
             is GridEvent.Error -> {
+                finishActivity()
                 items.add(Item.Error(event.message))
                 status = "Error"
             }
@@ -501,6 +532,7 @@ private fun ChatScreen(baseUrl: String, token: String, onSettings: () -> Unit) {
 
     fun runPrompt(prompt: String) {
         items.add(Item.User(prompt))
+        items.add(Item.Activity())
         busy = true
         status = "Sending"
         scope.launch {
@@ -514,6 +546,7 @@ private fun ChatScreen(baseUrl: String, token: String, onSettings: () -> Unit) {
                 status = if (message.startsWith("GRID API is offline")) "API offline" else "Error"
             } finally {
                 busy = false
+                finishActivity()
             }
             threads = runCatching {
                 withContext(Dispatchers.IO) { fetchThreads(baseUrl, token) }
@@ -780,6 +813,7 @@ private fun ChatScreen(baseUrl: String, token: String, onSettings: () -> Unit) {
                         estimated = item.estimated,
                     )
                     is Item.Tool -> ToolCard(item)
+                    is Item.Activity -> ActivityCard(item)
                     is Item.Artifact -> ArtifactCard(item.path)
                     is Item.Approval -> ApprovalCard(
                         approval = item,
@@ -938,6 +972,19 @@ private fun ChatScreen(baseUrl: String, token: String, onSettings: () -> Unit) {
     }
 }
 
+private enum class ToolKind { Command, Edit, Read, Tool }
+
+private fun toolKind(name: String): ToolKind = when (name.lowercase()) {
+    "run_command", "run_code" -> ToolKind.Command
+    "write_file", "delete_file", "create_directory", "save_skill", "delete_skill" ->
+        ToolKind.Edit
+    "read_file", "document_read", "file_search", "list_directory", "get_cwd",
+    "ref_read", "skill_read", "skill_search", "list_skills",
+    "memory_recall", "memory_status", "db_query", "db_analytics" ->
+        ToolKind.Read
+    else -> ToolKind.Tool
+}
+
 private sealed interface Item {
     data class User(val text: String) : Item
     data class Assistant(
@@ -947,6 +994,16 @@ private sealed interface Item {
         val tokens: Int = 0,
         val estimated: Boolean = false,
     ) : Item
+    data class Activity(
+        val commands: Int = 0,
+        val edits: Int = 0,
+        val reads: Int = 0,
+        val thoughts: Int = 0,
+        val tools: Int = 0,
+        val running: Boolean = true,
+    ) : Item {
+        val total: Int get() = commands + edits + reads + tools
+    }
     data class Tool(
         val callId: String,
         val name: String,
@@ -1466,6 +1523,72 @@ private fun ModelProviderDialog(
             TextButton(onClick = onDismiss) { Text("Close") }
         },
     )
+}
+
+@Composable
+private fun ActivityCard(activity: Item.Activity) {
+    var dots by remember(activity.running) { mutableStateOf(1) }
+    var seconds by remember(activity.running) { mutableStateOf(0) }
+    LaunchedEffect(activity.running) {
+        if (!activity.running) return@LaunchedEffect
+        while (true) {
+            delay(450)
+            dots = (dots % 3) + 1
+        }
+    }
+    LaunchedEffect(activity.running) {
+        if (!activity.running) return@LaunchedEffect
+        while (true) {
+            delay(1000)
+            seconds += 1
+        }
+    }
+    val summary = activityText(activity)
+    val label = if (activity.total == 0) "Thinking" + ".".repeat(dots) else "+$summary"
+    Surface(
+        color = Color(0xFF0E1711),
+        shape = RoundedCornerShape(8.dp),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Row(
+            Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            if (activity.running) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(13.dp),
+                    color = GridGreen,
+                    strokeWidth = 2.dp,
+                )
+            } else {
+                Text("✓", color = GridGreenDim, fontSize = 11.sp)
+            }
+            Spacer(Modifier.width(9.dp))
+            Text(
+                label,
+                color = if (activity.running) GridGreenDim else Muted,
+                fontSize = 11.sp,
+                fontFamily = FontFamily.Monospace,
+            )
+            if (activity.running && seconds > 0) {
+                Spacer(Modifier.width(8.dp))
+                Text("${seconds}s", color = Muted, fontSize = 10.sp)
+            }
+        }
+    }
+}
+
+private fun activityText(activity: Item.Activity): String {
+    val parts = mutableListOf<String>()
+    fun add(count: Int, singular: String, plural: String) {
+        if (count > 0) parts.add("$count ${if (count == 1) singular else plural}")
+    }
+    add(activity.commands, "command", "commands")
+    add(activity.edits, "edit", "edits")
+    add(activity.thoughts, "thought", "thoughts")
+    add(activity.reads, "read", "reads")
+    add(activity.tools, "tool", "tools")
+    return parts.joinToString(" · ")
 }
 
 private fun formatDuration(ms: Long): String =

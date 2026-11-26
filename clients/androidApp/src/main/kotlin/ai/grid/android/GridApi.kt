@@ -2,6 +2,7 @@ package ai.grid.android
 
 import android.content.Context
 import android.net.wifi.WifiManager
+import android.os.Build
 import java.net.DatagramPacket
 import java.net.DatagramSocket
 import java.net.HttpURLConnection
@@ -71,8 +72,29 @@ internal fun discoverHosts(context: Context, timeoutMs: Int = 1800): List<Discov
         socket.broadcast = true
         socket.soTimeout = 300
         val payload = "GRID_DISCOVER".toByteArray(Charsets.UTF_8)
-        val broadcast = InetAddress.getByName("255.255.255.255")
-        socket.send(DatagramPacket(payload, payload.size, broadcast, DISCOVERY_PORT))
+        val targets = linkedSetOf<InetAddress>()
+        targets.add(InetAddress.getByName("255.255.255.255"))
+        @Suppress("DEPRECATION")
+        val wifiIp = runCatching {
+            wifi?.connectionInfo?.ipAddress ?: 0
+        }.getOrDefault(0)
+        if (wifiIp != 0) {
+            val a = wifiIp and 0xff
+            val b = (wifiIp ushr 8) and 0xff
+            val c = (wifiIp ushr 16) and 0xff
+            runCatching { targets.add(InetAddress.getByName("$a.$b.$c.255")) }
+        }
+        val emulator = Build.FINGERPRINT.startsWith("generic") ||
+            Build.HARDWARE.contains("goldfish") ||
+            Build.HARDWARE.contains("ranchu")
+        if (emulator) {
+            runCatching { targets.add(InetAddress.getByName("10.0.2.2")) }
+        }
+        targets.forEach { target ->
+            runCatching {
+                socket.send(DatagramPacket(payload, payload.size, target, DISCOVERY_PORT))
+            }
+        }
         val deadline = System.currentTimeMillis() + timeoutMs
         while (System.currentTimeMillis() < deadline) {
             val buffer = ByteArray(1024)

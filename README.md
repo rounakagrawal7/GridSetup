@@ -607,22 +607,21 @@ cd clients
 adb install -r androidApp\build\outputs\apk\debug\androidApp-debug.apk
 ```
 
-On first launch, pair the phone instead of copying a secret:
+On first launch, the app discovers the host and asks only for a pairing code:
 
 1. Start the host on the LAN (`api.host` set to `0.0.0.0`).
-2. In the desktop app click **Pair phone** (or run `.\pair.ps1` if the host is headless). It shows the host URL and a 6-digit code valid for 15 minutes.
-3. On the phone, tap **Find GRID on Wi-Fi** (or type the URL), select the host, enter the code, and tap **Pair**.
+2. In the desktop app click **Pair phone** (or run `.\pair.ps1` if the host is headless). It shows a 6-digit code valid for 15 minutes.
+3. Open GRID on the phone. It finds the host automatically; select it if more than one is listed, enter the code, and tap **Pair**.
 
-The app stores the host token encrypted with an Android Keystore AES/GCM key. The code is one-time and rate-limited; pair only on a trusted LAN. Manual token entry remains under **OR PASTE THE API TOKEN** as a fallback.
+The setup screen has no URL or API-token fields. The app stores the host token encrypted with an Android Keystore AES/GCM key; the code is one-time and rate-limited, so pair only on a trusted LAN.
 
 - Type `/` for command autocomplete. Choosing a command opens its subcommands; tap either to insert it into the composer with the caret at the end.
 - Slash commands execute on the host through `POST /api/v1/command` — for example `/memory status`, `/rea status`, `/pb status`, `/model` and `/tools`.
 - The header shows the active model and provider plus a session token meter. Tap the model line to open **Model & provider** and switch either one.
 - **History** lists saved host threads, including the ones from before you started a new thread. Tap one to replay text and tool cards.
 - Every user, assistant, tool and system message has a **Copy** button.
-- Discovery uses a UDP broadcast on port **8772**; allow it through the firewall if the phone cannot find the host.
-- Emulator URL: `http://10.0.2.2:8771`
-- Phone URL: `http://<computer-LAN-IP>:8771` (host must listen on `0.0.0.0`).
+- The in-chat activity line matches the desktop: **Thinking…** with elapsed time, then **✓ +1 command · 2 edits · 3 thoughts · 2 reads · 1 tool** once the run finishes.
+- Discovery uses a UDP broadcast on port **8772**; allow it through the firewall if the phone cannot find the host. The emulator is probed at `10.0.2.2` automatically.
 - LAN exposure should be token-protected; cleartext HTTP is allowed in this development build.
 
 #### Build details
@@ -908,7 +907,7 @@ cd clients
 .\gradlew.bat :shared:jvmTest :desktopApp:compileKotlin :androidApp:assembleDebug :androidApp:testDebugUnitTest
 ```
 
-Current suite: **167 tests**, **14 Android tests**, **51/51 routing evals**, desktop compile, Android debug APK, and an Android emulator smoke test (Pixel 8, API 36) covering pairing, LAN discovery formatting, first-run setup, health check, streaming chat, tool cards, command/subcommand autocomplete, server-command routing, new-thread reset, history replay, model switching, copy buttons, the token meter and token persistence across an app restart.
+Current suite: **167 tests**, **14 Android tests**, **51/51 routing evals**, desktop compile, Android debug APK, and an Android emulator smoke test (Pixel 8, API 36) covering pairing-only setup, LAN discovery, the Thinking/counter activity line, first-run setup, streaming chat, tool cards, command/subcommand autocomplete, server-command routing, new-thread reset, history replay, model switching, copy buttons, the token meter and token persistence across an app restart.
 
 ## Documentation
 
