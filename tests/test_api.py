@@ -171,6 +171,18 @@ class APITestCase(unittest.TestCase):
         )
         self.assertEqual(plain.status_code, 400)
 
+    def test_pb_status_command_reports_manager(self):
+        response = requests.post(
+            f"{self.base}/command",
+            json={"command": "/pb status"},
+            headers=self.headers,
+            timeout=10,
+        )
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertTrue(payload["ok"])
+        self.assertIn("PocketBase", payload["output"])
+
     def test_shutdown_endpoint_saves_and_signals(self):
         runtime = self.server.runtime
         old = getattr(runtime, "EXPLICIT_SHUTDOWN", False)

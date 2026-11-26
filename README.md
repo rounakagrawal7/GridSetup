@@ -62,6 +62,25 @@ The latest release adds a real memory system that works across sessions with **z
 
 The profile refuses credentials, API keys, passwords and secrets. You can also edit `grid_persona.md` directly; it is read again on the next turn.
 
+### DuckDB vs PocketBase
+
+They are separate layers, not alternatives.
+
+| | **DuckDB** | **PocketBase** |
+|---|---|---|
+| What it is | Embedded analytical database | Optional external REST service |
+| Runs as | In-process library | `pocketbase.exe` on `127.0.0.1:8090` |
+| File/location | `grid_data.duckdb` | `pb_data/` + admin UI |
+| Required? | Core memory/analytics when installed | Optional mirror/admin surface |
+| Tables/collections | `tool_logs`, `web_cache`, `scan_results`, `sessions`, `memory_atoms`, `memory_scenarios`, `memory_refs` | `conversations`, `artifacts`, `settings` |
+| Used by | `Recaller`, `/memory`, `/ref`, `db_query`, `db_analytics`, tool logging | `/pb`, `pb_status`, `pb_sync`, `pb_upload` |
+| Network | None | Loopback REST |
+| Primary data? | **Yes** for layered memory, logs and refs | **No** — a sync/backup/inspection mirror |
+
+DuckDB is the primary local store. The profile lives in `grid_persona.md`, the transcript in `memory.md`, offloaded tool outputs in `refs/`, and atoms/scenarios/refs in DuckDB. PocketBase mirrors recent conversations, artifacts and settings for its admin UI and optional external use.
+
+PocketBase does **not** need the Python `pocketbase` package. `grid_pb.py` talks to the PocketBase binary over HTTP using `requests`; the binary is downloaded with `/pb install` and started with `/pb start`. In `--api` mode the manager is now initialized lazily, so `/pb status`, `/pb start`, `/pb stop`, `/pb install` and `/pb sync` work from the desktop. The default admin credentials are `admin@example.com` / `change-me-password`; change them before exposing the service.
+
 *Inspired by the layered-memory approach popularised by agent frameworks such as Hermes and OpenClaw and TencentDB Agent Memory — humanlike memory, not a bigger scratchpad.*
 
 ---

@@ -746,11 +746,28 @@ class GridAPIServer:
         tools = getattr(self.runtime, "Tools", None)
         pb = getattr(tools, "pb", None) if tools is not None else None
         if pb is None:
-            return "PocketBase not initialized. Check the pocketbase-client install."
+            try:
+                from grid_pb import PocketBaseManager
+
+                pb = PocketBaseManager()
+                if tools is not None:
+                    tools.pb = pb
+            except Exception as exc:
+                return f"PocketBase support unavailable: {exc}"
         sub = args.strip().lower()
         if not sub or sub == "status":
-            return pb.status_text()
+            status = pb.status_text()
+            if not pb.is_running():
+                binary = pb._find_binary()
+                status += (
+                    f"\n  Binary:   {binary}"
+                    if binary
+                    else "\n  Binary:   not installed — run /pb install"
+                )
+            return status
         if sub == "start":
+            if not pb._find_binary():
+                return "PocketBase binary not found. Run /pb install first."
             return "PocketBase started." if pb.start() else "Failed to start PocketBase."
         if sub == "stop":
             pb.stop()
@@ -1474,6 +1491,17 @@ class GridAPIServer:
 
 
 def run_api(orchestrator, console, config: Optional[Dict[str, Any]] = None, tools=None) -> int:
+    if tools is not None and getattr(tools, "pb", None) is None:
+        try:
+            import atexit
+
+            from grid_pb import PocketBaseManager
+
+            manager = PocketBaseManager()
+            tools.pb = manager
+            atexit.register(manager.stop)
+        except Exception:
+            pass
     cfg = (config or {}).get("api") or {}
     host = str(cfg.get("host") or DEFAULT_HOST)
     try:

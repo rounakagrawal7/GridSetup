@@ -26,7 +26,7 @@
 - New `--api` host: a loopback AG-UI 1.0 endpoint over HTTP+SSE with bearer
   auth, thread storage, live tool/activity events, approval requests and REA
   report endpoints. The API resolves the live `__main__` tools so events and
-  request-scoped policies work in the real process (159 tests total).
+  request-scoped policies work in the real process (160 tests total).
 - First Kotlin Multiplatform client under `clients/`: a shared `GridAgentClient`
   over the AG-UI Kotlin SDK, a Compose Desktop shell with a live tool timeline,
   approval cards and REA artifact cards, and a JVM contract test that replays
@@ -62,6 +62,10 @@
   summary of commands, edits, thoughts, reads and tools.
 - `/exit` saves host conversation memory (and syncs PocketBase when connected)
   before closing the desktop window.
+- PocketBase now initializes in `--api` mode and lazily from `/pb`; `/pb status`
+  shows the binary path, and start/stop/install/sync work from the desktop.
+  The old “check pocketbase-client install” message was removed — the Python
+  `pocketbase` package is not required.
 - `/shutdown` adds a confirmation dialog, then saves, stops the API host and
   suppresses resident auto-restart before closing the desktop.
 - Copy icons on every user message, assistant reply, server-command note and

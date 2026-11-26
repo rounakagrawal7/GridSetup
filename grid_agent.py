@@ -6225,18 +6225,20 @@ def main(argv=None):
         return
 
     pb = PocketBaseManager()
+    Tools.pb = pb
+
+    def _pb_cleanup():
+        if Tools.pb:
+            try:
+                Tools.pb.sync_memory(Tools.memory_ref.history, "grid")
+            except Exception:
+                pass
+            Tools.pb.stop()
+
+    atexit.register(_pb_cleanup)
     started = pb.start()
     if started:
-        Tools.pb = pb
         console.print(f"  [{M}][+] PocketBase running at [bold]{pb.base_url}/_/[/][/]")
-        def _pb_cleanup():
-            if Tools.pb:
-                try:
-                    Tools.pb.sync_memory(Tools.memory_ref.history, "grid")
-                except Exception:
-                    pass
-                Tools.pb.stop()
-        atexit.register(_pb_cleanup)
         if memory.history:
             pb.sync_memory(memory.history, "grid")
     else:
@@ -6487,7 +6489,7 @@ def main(argv=None):
                     if cmd == "/pb":
                         console.print(f"\n  [bold {M}]PocketBase Control[/]")
                         if not Tools.pb:
-                            console.print(f"  [{M_DIM}]PocketBase not initialized. Check pocketbase-client install.[/]")
+                            console.print(f"  [{M_DIM}]PocketBase manager unavailable. Try /pb install.[/]")
                             continue
                         console.print(Tools.pb.status_text())
                         console.print()

@@ -236,6 +236,9 @@ Landed:
   `/api/v1/tools`; the composer opens a second-level palette after commands
   with documented subcommands and executes them through the existing API or
   tool route.
+- Storage split: DuckDB is the primary embedded memory/analytics store;
+  PocketBase is an optional HTTP mirror. `--api` now initializes the
+  PocketBase manager lazily so `/pb status|start|stop|install|sync` work.
 
 Still open:
 
