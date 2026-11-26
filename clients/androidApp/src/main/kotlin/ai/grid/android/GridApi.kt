@@ -39,6 +39,49 @@ internal data class ProviderInfo(
     val providers: List<ProviderOption>,
 )
 
+internal fun normalizeBaseUrl(raw: String): String {
+    var value = raw.filterNot { it.isWhitespace() }
+    if (value.isBlank()) return value
+    val lastScheme = maxOf(value.lastIndexOf("http://"), value.lastIndexOf("https://"))
+    if (lastScheme > 0) value = value.substring(lastScheme)
+    if (!value.startsWith("http://") && !value.startsWith("https://")) {
+        value = "http://$value"
+    }
+    return value.trimEnd('/')
+}
+
+internal fun normalizeToken(raw: String): String =
+    raw.trim()
+        .removeSurrounding("\"")
+        .removeSurrounding("'")
+        .filterNot { it.isWhitespace() }
+
+/**
+ * Returns null when /api/v1/health answers 200, otherwise a message the
+ * setup/chat screen can show. 401 is reported as an auth failure instead of
+ * the misleading "API offline".
+ */
+internal fun healthFailure(baseUrl: String, token: String): String? {
+    return try {
+        val connection = URL("$baseUrl/api/v1/health").openConnection() as HttpURLConnection
+        connection.requestMethod = "GET"
+        connection.setRequestProperty("Authorization", "Bearer $token")
+        connection.connectTimeout = 4000
+        connection.readTimeout = 4000
+        try {
+            when (val code = connection.responseCode) {
+                200 -> null
+                401, 403 -> "Authentication failed (HTTP $code). Copy the current token from run/api_token and paste it again."
+                else -> "Host answered HTTP $code at $baseUrl."
+            }
+        } finally {
+            connection.disconnect()
+        }
+    } catch (error: Exception) {
+        "Cannot reach $baseUrl. Check the URL, phone Wi-Fi and that the host is running. (${error.javaClass.simpleName})"
+    }
+}
+
 internal fun fetchThreads(baseUrl: String, token: String): List<ThreadSummary> {
     val root = getJson(baseUrl, token, "/api/v1/threads")
     val array = root.optJSONArray("threads") ?: return emptyList()

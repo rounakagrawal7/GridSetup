@@ -112,7 +112,7 @@ class MainActivity : ComponentActivity() {
 
 @Composable
 private fun GridRoot(store: TokenStore) {
-    var baseUrl by remember { mutableStateOf(store.loadUrl()) }
+    var baseUrl by remember { mutableStateOf(normalizeBaseUrl(store.loadUrl())) }
     var token by remember { mutableStateOf(store.loadToken()) }
     var editing by remember { mutableStateOf(token.isBlank()) }
 
@@ -121,8 +121,8 @@ private fun GridRoot(store: TokenStore) {
             initialUrl = baseUrl,
             initialToken = token,
             onConnect = { url, newToken ->
-                baseUrl = url.trimEnd('/')
-                token = newToken
+                baseUrl = normalizeBaseUrl(url)
+                token = normalizeToken(newToken)
                 store.saveUrl(baseUrl)
                 store.saveToken(token)
                 editing = false
@@ -171,7 +171,8 @@ private fun SetupScreen(
         )
         Text(
             "Emulator: http://10.0.2.2:8771\n" +
-                "Physical device: http://<computer-LAN-IP>:8771 (set api.host to 0.0.0.0)",
+                "Phone: http://<computer-LAN-IP>:8771 (host must listen on 0.0.0.0)\n" +
+                "Clear this field before pasting a new URL.",
             color = Muted,
             fontSize = 11.sp,
         )
@@ -238,16 +239,9 @@ private fun ChatScreen(baseUrl: String, token: String, onSettings: () -> Unit) {
 
     LaunchedEffect(baseUrl, token) {
         status = "Connecting"
-        val online = withContext(Dispatchers.IO) { apiHealthy(baseUrl, token) }
-        status = if (online) "Ready" else "API offline"
-        if (!online) {
-            items.add(
-                Item.System(
-                    "GRID API is offline at $baseUrl.\n" +
-                        "Start it with: python grid_agent.py --api --no-input"
-                )
-            )
-        } else {
+        val failure = withContext(Dispatchers.IO) { healthFailure(baseUrl, token) }
+        if (failure == null) {
+            status = "Ready"
             val loaded = withContext(Dispatchers.IO) {
                 val info = runCatching { fetchProviderInfo(baseUrl, token) }.getOrNull()
                 val currentModels = runCatching { fetchCurrentModels(baseUrl, token) }
@@ -264,6 +258,9 @@ private fun ChatScreen(baseUrl: String, token: String, onSettings: () -> Unit) {
             }
             models = loaded.second
             threads = loaded.third
+        } else {
+            status = if (failure.startsWith("Authentication")) "Auth failed" else "API offline"
+            items.add(Item.Error(failure))
         }
     }
 
@@ -1339,23 +1336,6 @@ private fun formatTokens(tokens: Int): String =
 
 private fun formatWhen(timestamp: String): String =
     timestamp.replace("T", " ").take(16).ifBlank { "unknown" }
-
-private fun apiHealthy(baseUrl: String, token: String): Boolean {
-    return try {
-        val connection = URL("$baseUrl/api/v1/health").openConnection() as HttpURLConnection
-        connection.requestMethod = "GET"
-        connection.setRequestProperty("Authorization", "Bearer $token")
-        connection.connectTimeout = 2500
-        connection.readTimeout = 2500
-        try {
-            connection.responseCode == 200
-        } finally {
-            connection.disconnect()
-        }
-    } catch (_: Exception) {
-        false
-    }
-}
 
 private fun postApproval(
     baseUrl: String,

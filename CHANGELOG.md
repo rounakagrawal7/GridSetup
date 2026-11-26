@@ -59,6 +59,10 @@
   `grid.stats` before `TEXT_MESSAGE_START`, so timing/token counts were being
   attached to the previous assistant reply. They now wait for the current
   message and land on the correct one.
+- Android setup hardening: pasted host URLs are normalized (whitespace, missing
+  scheme, trailing slash, or a URL pasted over the emulator default), tokens are
+  stripped of surrounding quotes/whitespace, and a 401 now reports
+  "Authentication failed" instead of the misleading "API offline".
 - Server-driven UI MVP: locked catalog (`markdown`, `table`, `keyValue`, `card`,
   `button`, `form`, `select`, `approval`, `artifact`, `chart`), native Compose
   renderer, server-side macros, rich tool and REA findings surfaces, and
