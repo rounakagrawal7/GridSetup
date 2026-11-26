@@ -604,6 +604,8 @@ adb install -r androidApp\build\outputs\apk\debug\androidApp-debug.apk
 
 On first launch, enter the host URL and paste `run/api_token`. The token is encrypted with an Android Keystore AES/GCM key.
 
+- Type `/` for command autocomplete. Choosing a command opens its subcommands; tap either to insert it into the composer.
+- Slash commands execute on the host through `POST /api/v1/command` — for example `/memory status`, `/rea status`, `/pb status`, `/model` and `/tools`.
 - Emulator URL: `http://10.0.2.2:8771`
 - Physical device: set `api.host` to `0.0.0.0` in `config.json`, restart `--api`, and use `http://<computer-LAN-IP>:8771`.
 - LAN exposure should be token-protected; cleartext HTTP is allowed in this development build.
@@ -888,10 +890,10 @@ A single cycle runs all phases: reply to new comments on **your own posts**, upv
 
 # KMP clients
 cd clients
-.\gradlew.bat :shared:jvmTest :desktopApp:compileKotlin :androidApp:assembleDebug
+.\gradlew.bat :shared:jvmTest :desktopApp:compileKotlin :androidApp:assembleDebug :androidApp:testDebugUnitTest
 ```
 
-Current suite: **160 tests**, **51/51 routing evals**, desktop compile, Android debug APK, and an Android emulator smoke test (Pixel 8, API 36) covering first-run setup, health check, streaming chat, tool cards, new-thread reset and token persistence across an app restart.
+Current suite: **160 tests**, **9 Android palette tests**, **51/51 routing evals**, desktop compile, Android debug APK, and an Android emulator smoke test (Pixel 8, API 36) covering first-run setup, health check, streaming chat, tool cards, command/subcommand autocomplete, server-command routing, new-thread reset and token persistence across an app restart.
 
 ## Documentation
 

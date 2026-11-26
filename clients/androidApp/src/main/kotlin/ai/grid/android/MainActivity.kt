@@ -7,6 +7,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -14,6 +15,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
@@ -51,7 +53,10 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
@@ -206,7 +211,10 @@ private fun ChatScreen(baseUrl: String, token: String, onSettings: () -> Unit) {
     var busy by remember { mutableStateOf(false) }
     var status by remember { mutableStateOf("Connecting") }
     var threadId by remember { mutableStateOf(GridAgentClient.newThreadId()) }
+    var toolCommands by remember { mutableStateOf<List<SlashCommand>>(emptyList()) }
     val client = remember(baseUrl, token) { GridAgentClient(baseUrl, token) }
+    val focusRequester = remember { FocusRequester() }
+    val keyboard = LocalSoftwareKeyboardController.current
 
     LaunchedEffect(baseUrl, token) {
         status = "Connecting"
@@ -219,6 +227,8 @@ private fun ChatScreen(baseUrl: String, token: String, onSettings: () -> Unit) {
                         "Start it with: python grid_agent.py --api --no-input"
                 )
             )
+        } else {
+            toolCommands = withContext(Dispatchers.IO) { fetchToolCommands(baseUrl, token) }
         }
     }
 
@@ -287,10 +297,7 @@ private fun ChatScreen(baseUrl: String, token: String, onSettings: () -> Unit) {
         }
     }
 
-    fun send() {
-        val prompt = input.trim()
-        if (prompt.isEmpty() || busy) return
-        input = ""
+    fun runPrompt(prompt: String) {
         items.add(Item.User(prompt))
         busy = true
         status = "Sending"
@@ -307,6 +314,99 @@ private fun ChatScreen(baseUrl: String, token: String, onSettings: () -> Unit) {
                 busy = false
             }
         }
+    }
+
+    fun runServerCommand(command: String) {
+        if (busy) return
+        busy = true
+        status = "Running command"
+        scope.launch {
+            try {
+                val output = withContext(Dispatchers.IO) {
+                    postServerCommand(baseUrl, token, command)
+                }
+                items.add(Item.System(output))
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                items.add(Item.Error(error.message ?: "Command failed"))
+            } finally {
+                busy = false
+                status = "Ready"
+            }
+        }
+    }
+
+    fun helpText(): String = buildString {
+        appendLine("Android commands:")
+        APP_COMMANDS.forEach { appendLine("  ${it.name.padEnd(12)} = ${it.description}") }
+        appendLine()
+        appendLine("Plus ${toolCommands.size} host tools (type /tools).")
+        append("Type / to autocomplete; tap a suggestion to insert it.")
+    }
+
+    fun handleSlash(raw: String): Boolean {
+        val command = raw.trim()
+        if (!command.startsWith("/")) return false
+        val name = command.substringBefore(" ").lowercase()
+        val args = command.substringAfter(" ", "").trim()
+        val toolName = name.removePrefix("/")
+        when {
+            name == "/help" -> items.add(Item.System(helpText()))
+            name == "/new" -> {
+                threadId = GridAgentClient.newThreadId()
+                items.clear()
+                status = "Ready"
+            }
+            name == "/clear" -> {
+                items.clear()
+                status = "Ready"
+            }
+            name == "/settings" -> onSettings()
+            name == "/tool" -> {
+                if (args.isBlank()) {
+                    items.add(Item.System("Usage: /tool <name> <input>"))
+                } else {
+                    runPrompt(args)
+                }
+            }
+            name == "/rea" -> {
+                when {
+                    args.isBlank() -> items.add(
+                        Item.System("Usage: /rea authorized <url> | authorize|revoke|list|status")
+                    )
+                    args == "list" ||
+                        args == "status" ||
+                        args == "help" ||
+                        args.startsWith("authorize ") ||
+                        args.startsWith("revoke ") -> runServerCommand("/rea $args")
+                    args.startsWith("authorized ") -> runPrompt("rea $args")
+                    else -> runPrompt("rea authorized $args")
+                }
+            }
+            name in SERVER_COMMANDS -> runServerCommand(command)
+            toolCommands.any { it.name.equals("/$toolName", ignoreCase = true) } ->
+                runPrompt(if (args.isEmpty()) toolName else "$toolName $args")
+            else -> items.add(
+                Item.System("Unknown command: $name\nType /help for available commands.")
+            )
+        }
+        return true
+    }
+
+    fun send() {
+        val prompt = input.trim()
+        if (prompt.isEmpty() || busy) return
+        input = ""
+        if (prompt.startsWith("/") && handleSlash(prompt)) return
+        runPrompt(prompt)
+    }
+
+    val allCommands = remember(toolCommands) {
+        mergeSlashCommands(APP_COMMANDS, toolCommands)
+    }
+    val palette = remember(input, allCommands) {
+        buildSlashPalette(input, allCommands)
     }
 
     fun resolveApproval(index: Int, approval: Item.Approval, decision: String) {
@@ -372,34 +472,88 @@ private fun ChatScreen(baseUrl: String, token: String, onSettings: () -> Unit) {
             }
         }
 
-        Row(
-            Modifier.fillMaxWidth().padding(10.dp),
-            verticalAlignment = Alignment.Bottom,
-        ) {
-            OutlinedTextField(
-                value = input,
-                onValueChange = { input = it },
-                modifier = Modifier.weight(1f),
-                placeholder = { Text("Ask GRID…", color = Muted) },
-                maxLines = 4,
-                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
-                keyboardActions = KeyboardActions(onSend = { send() }),
-            )
-            Spacer(Modifier.width(8.dp))
-            Button(
-                onClick = { send() },
-                enabled = !busy && input.isNotBlank(),
-                colors = ButtonDefaults.buttonColors(containerColor = GridGreen, contentColor = Color.Black),
-                modifier = Modifier.height(56.dp),
+        Column(Modifier.fillMaxWidth().padding(10.dp)) {
+            palette?.let { panel ->
+                Surface(
+                    color = PanelRaised,
+                    shape = RoundedCornerShape(10.dp),
+                    modifier = Modifier.fillMaxWidth().padding(bottom = 6.dp),
+                ) {
+                    Column(Modifier.padding(6.dp)) {
+                        Row(
+                            Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 3.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(
+                                panel.header,
+                                color = GridGreen,
+                                fontSize = 9.sp,
+                                letterSpacing = 1.2.sp,
+                            )
+                            Spacer(Modifier.weight(1f))
+                            Text("Tap to insert", color = Muted, fontSize = 9.sp)
+                        }
+                        LazyColumn(Modifier.fillMaxWidth().heightIn(max = 220.dp)) {
+                            itemsIndexed(panel.suggestions) { _, suggestion ->
+                                Row(
+                                    Modifier
+                                        .fillMaxWidth()
+                                        .clickable {
+                                            input = suggestion.applyText
+                                            focusRequester.requestFocus()
+                                            keyboard?.show()
+                                        }
+                                        .padding(horizontal = 8.dp, vertical = 7.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    Text(
+                                        suggestion.label,
+                                        color = GridGreen,
+                                        fontSize = 12.sp,
+                                        fontFamily = FontFamily.Monospace,
+                                        modifier = Modifier.width(130.dp),
+                                    )
+                                    Text(
+                                        "= ${suggestion.description}",
+                                        color = Muted,
+                                        fontSize = 11.sp,
+                                        maxLines = 2,
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            Row(
+                Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.Bottom,
             ) {
-                if (busy) {
-                    CircularProgressIndicator(
-                        modifier = Modifier.size(18.dp),
-                        color = Color.Black,
-                        strokeWidth = 2.dp,
-                    )
-                } else {
-                    Text("Send")
+                OutlinedTextField(
+                    value = input,
+                    onValueChange = { input = it },
+                    modifier = Modifier.weight(1f).focusRequester(focusRequester),
+                    placeholder = { Text("Ask GRID…", color = Muted) },
+                    maxLines = 4,
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
+                    keyboardActions = KeyboardActions(onSend = { send() }),
+                )
+                Spacer(Modifier.width(8.dp))
+                Button(
+                    onClick = { send() },
+                    enabled = !busy && input.isNotBlank(),
+                    colors = ButtonDefaults.buttonColors(containerColor = GridGreen, contentColor = Color.Black),
+                    modifier = Modifier.height(56.dp),
+                ) {
+                    if (busy) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(18.dp),
+                            color = Color.Black,
+                            strokeWidth = 2.dp,
+                        )
+                    } else {
+                        Text("Send")
+                    }
                 }
             }
         }

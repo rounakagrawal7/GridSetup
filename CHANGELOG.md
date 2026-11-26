@@ -46,6 +46,10 @@
   `/memory`, `/life`, `/plan`, `/ref`, `/jobs`, `/pb`, `/persona`, `/social`,
   `/comms`, `/ctf`, `/game`, `/gcal`, `/gsheet`, `/save` and `/export` work
   directly from the desktop composer and render their output in chat.
+- Android parity: the composer now has `/` command and subcommand autocomplete
+  (tap to insert) and routes server commands through `POST /api/v1/command`, so
+  `/memory status`, `/rea status`, `/pb status`, `/model`, `/tools` and the
+  registered tool commands behave like they do on the desktop.
 - Server-driven UI MVP: locked catalog (`markdown`, `table`, `keyValue`, `card`,
   `button`, `form`, `select`, `approval`, `artifact`, `chart`), native Compose
   renderer, server-side macros, rich tool and REA findings surfaces, and
