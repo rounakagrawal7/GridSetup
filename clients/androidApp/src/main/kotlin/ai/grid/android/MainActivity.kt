@@ -162,7 +162,9 @@ private fun SetupScreen(
         scanning = true
         scanError = null
         scope.launch {
-            discovered = withContext(Dispatchers.IO) { discoverHosts(context) }
+            discovered = withContext(Dispatchers.IO) {
+                runCatching { discoverHosts(context) }.getOrDefault(emptyList())
+            }
             scanning = false
             if (discovered.size == 1) {
                 url = discovered.first().url
