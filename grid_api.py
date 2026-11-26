@@ -27,9 +27,10 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
-from urllib.parse import unquote, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 
 from grid_permissions import PermissionPolicy
+from grid_dna import DnaError, DnaNotFound, DnaStore
 
 HERE = Path(__file__).resolve().parent
 RUN_DIR = HERE / "run"
@@ -397,6 +398,7 @@ class GridAPIServer:
         host: str = DEFAULT_HOST,
         port: int = DEFAULT_PORT,
         thread_store: Optional[ThreadStore] = None,
+        dna_store: Optional[DnaStore] = None,
         refs_dir: Optional[Path] = None,
     ):
         self.orchestrator = orchestrator
@@ -406,6 +408,7 @@ class GridAPIServer:
         self.host = host
         self.port = int(port)
         self.threads = thread_store or ThreadStore()
+        self.dna = dna_store or DnaStore()
         self.refs_dir = Path(refs_dir) if refs_dir else REFS_REA
         self.pairing = PairingManager()
         self._discovery: Optional[DiscoveryResponder] = None
@@ -459,6 +462,48 @@ class GridAPIServer:
             "protocol": PROTOCOL_VERSION,
             "message": "Paired with GRID",
         }
+
+    def _dna_create(self, body: Dict[str, Any]) -> Tuple[int, Dict[str, Any]]:
+        try:
+            return 200, {"ok": True, "room": self.dna.create_room(str(body.get("title") or "DNA room"))}
+        except DnaError as exc:
+            return 400, {"ok": False, "error": str(exc)}
+
+    def _dna_add(
+        self,
+        room_id: str,
+        body: Dict[str, Any],
+    ) -> Tuple[int, Dict[str, Any]]:
+        try:
+            message = self.dna.add_message(
+                room_id,
+                str(body.get("sender") or "user"),
+                str(body.get("kind") or "chat"),
+                str(body.get("content") or ""),
+                body.get("meta") if isinstance(body.get("meta"), dict) else {},
+            )
+            return 200, {"ok": True, "message": message}
+        except DnaNotFound as exc:
+            return 404, {"ok": False, "error": str(exc)}
+        except DnaError as exc:
+            return 400, {"ok": False, "error": str(exc)}
+
+    def _dna_status(
+        self,
+        room_id: str,
+        body: Dict[str, Any],
+    ) -> Tuple[int, Dict[str, Any]]:
+        try:
+            room = self.dna.set_status(
+                room_id,
+                str(body.get("status") or ""),
+                body.get("generation") if "generation" in body else None,
+            )
+            return 200, {"ok": True, "room": room}
+        except DnaNotFound as exc:
+            return 404, {"ok": False, "error": str(exc)}
+        except DnaError as exc:
+            return 400, {"ok": False, "error": str(exc)}
 
     def _model_info(self) -> Dict[str, Any]:
         backend = getattr(self.orchestrator, "backend", None)
@@ -1513,6 +1558,35 @@ class GridAPIServer:
                             **server.pairing.status(),
                         },
                     )
+                elif path == "/api/v1/dna/rooms":
+                    server._json(
+                        self,
+                        200,
+                        {"ok": True, "rooms": server.dna.list_rooms()},
+                    )
+                elif path.startswith("/api/v1/dna/rooms/"):
+                    rest = unquote(path[len("/api/v1/dna/rooms/"):])
+                    if "/" in rest:
+                        server._json(self, 404, {"ok": False, "error": "not found"})
+                        return
+                    try:
+                        after = int(
+                            parse_qs(urlparse(self.path).query)
+                            .get("after", ["0"])[0]
+                        )
+                    except (TypeError, ValueError):
+                        after = 0
+                    try:
+                        room, messages = server.dna.get_room(rest, after)
+                        server._json(
+                            self,
+                            200,
+                            {"ok": True, "room": room, "messages": messages},
+                        )
+                    except DnaNotFound as exc:
+                        server._json(self, 404, {"ok": False, "error": str(exc)})
+                    except DnaError as exc:
+                        server._json(self, 400, {"ok": False, "error": str(exc)})
                 elif path == "/api/v1/ui/catalog":
                     from grid_ui import catalog
 
@@ -1575,6 +1649,28 @@ class GridAPIServer:
                     return
                 if not self._authorized():
                     server._json(self, 401, {"ok": False, "error": "unauthorized"})
+                    return
+                if path == "/api/v1/dna/rooms":
+                    code, payload = server._dna_create(self._read_json())
+                    server._json(self, code, payload)
+                    return
+                if path.startswith("/api/v1/dna/rooms/"):
+                    rest = unquote(path[len("/api/v1/dna/rooms/"):])
+                    if rest.endswith("/messages"):
+                        room_id = rest[: -len("/messages")]
+                        code, payload = server._dna_add(
+                            room_id, self._read_json()
+                        )
+                        server._json(self, code, payload)
+                        return
+                    if rest.endswith("/status"):
+                        room_id = rest[: -len("/status")]
+                        code, payload = server._dna_status(
+                            room_id, self._read_json()
+                        )
+                        server._json(self, code, payload)
+                        return
+                    server._json(self, 404, {"ok": False, "error": "not found"})
                     return
                 if path == "/api/v1/agent":
                     body = self._read_json()

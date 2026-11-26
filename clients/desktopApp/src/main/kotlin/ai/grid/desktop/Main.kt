@@ -101,6 +101,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
@@ -167,6 +168,7 @@ private val SLASH_COMMANDS = listOf(
     ),
     SlashCommand("/tools", "List every GRID tool"),
     SlashCommand("/pair", "Show the phone pairing code and LAN URL"),
+    SlashCommand("/dna", "Open the DNA evolution room"),
     SlashCommand("/tool", "Run a tool: /tool <name> <input>", template = "/tool "),
     SlashCommand(
         "/memory",
@@ -347,6 +349,7 @@ private fun App(
     var providerInfo by remember { mutableStateOf<ProviderInfo?>(null) }
     var showProviderDialog by remember { mutableStateOf(false) }
     var showPairDialog by remember { mutableStateOf(false) }
+    var showDna by remember { mutableStateOf(false) }
     var threads by remember { mutableStateOf(emptyList<ThreadSummary>()) }
     var tools by remember { mutableStateOf(emptyList<ToolInfo>()) }
     var totalTokens by remember { mutableStateOf(0) }
@@ -929,6 +932,7 @@ private fun App(
                 )
             )
             name == "/provider" -> openProviderDialog()
+            name == "/dna" -> showDna = true
             name == "/tokens" -> items.add(
                 Item.Note(
                     "Session: $runCount runs · ${formatTokens(totalTokens)} tokens\n" +
@@ -1185,6 +1189,7 @@ private fun App(
             onModelChange = { changeModel(it) },
             onProviderChange = { openProviderDialog() },
             onPairPhone = { showPairDialog = true },
+            onDnaRoom = { showDna = true },
             onThreadOpen = { openThread(it) },
             onRefreshThreads = { refreshThreads() },
             onClearHistory = {
@@ -1206,6 +1211,15 @@ private fun App(
                 send(it)
             },
         )
+        if (showDna) {
+            Box(Modifier.weight(1f).fillMaxHeight()) {
+                DnaRoomScreen(
+                    baseUrl = baseUrl,
+                    token = token,
+                    onClose = { showDna = false },
+                )
+            }
+        } else {
         Column(Modifier.weight(1f).fillMaxHeight().padding(18.dp)) {
             Header(status = status, threadId = threadId)
             Spacer(Modifier.height(12.dp))
@@ -1278,6 +1292,7 @@ private fun App(
                 onSend = { send() },
                 onStop = { stopRun() },
             )
+        }
         }
     }
     }
@@ -1925,6 +1940,335 @@ private fun PairPhoneDialog(
 }
 
 @Composable
+private fun DnaRoomScreen(
+    baseUrl: String,
+    token: String,
+    onClose: () -> Unit,
+) {
+    val scope = rememberCoroutineScope()
+    val client = remember(baseUrl, token) { GridAgentClient(baseUrl, token) }
+    var room by remember { mutableStateOf<DnaRoom?>(null) }
+    val messages = remember { mutableStateListOf<DnaMessage>() }
+    var input by remember { mutableStateOf(TextFieldValue("")) }
+    var busy by remember { mutableStateOf(false) }
+    var asking by remember { mutableStateOf(false) }
+    var loading by remember { mutableStateOf(true) }
+    var error by remember { mutableStateOf("") }
+    val listState = rememberLazyListState()
+
+    fun ingest(payload: DnaRoomPayload) {
+        room = payload.room
+        val known = messages.map { it.id }.toSet()
+        payload.messages.forEach { message ->
+            if (message.id !in known) messages.add(message)
+        }
+    }
+
+    LaunchedEffect(Unit) {
+        loading = true
+        val rooms = withContext(Dispatchers.IO) { fetchDnaRooms(baseUrl, token) }
+        if (rooms == null) {
+            error = "Could not load DNA rooms. Is the host running?"
+            loading = false
+            return@LaunchedEffect
+        }
+        val active = rooms.firstOrNull() ?: withContext(Dispatchers.IO) {
+            createDnaRoom(baseUrl, token, "GRID x OpenCode")
+        }
+        if (active == null) {
+            error = "Could not create a DNA room."
+            loading = false
+            return@LaunchedEffect
+        }
+        room = active
+        withContext(Dispatchers.IO) {
+            fetchDnaRoom(baseUrl, token, active.id, 0)
+        }?.let { ingest(it) }
+        loading = false
+    }
+
+    LaunchedEffect(room?.id) {
+        val id = room?.id ?: return@LaunchedEffect
+        while (true) {
+            delay(1500)
+            val payload = withContext(Dispatchers.IO) {
+                fetchDnaRoom(baseUrl, token, id, messages.lastOrNull()?.id ?: 0)
+            }
+            if (payload != null) ingest(payload)
+        }
+    }
+
+    LaunchedEffect(messages.size) {
+        if (messages.isNotEmpty()) {
+            listState.animateScrollToItem(messages.lastIndex)
+        }
+    }
+
+    fun sendUserMessage() {
+        val id = room?.id ?: return
+        val text = input.text.trim()
+        if (text.isEmpty() || busy || asking) return
+        input = TextFieldValue("")
+        busy = true
+        error = ""
+        scope.launch {
+            val ok = withContext(Dispatchers.IO) {
+                postDnaMessage(baseUrl, token, id, "user", "chat", text)
+            }
+            if (ok) {
+                val payload = withContext(Dispatchers.IO) {
+                    fetchDnaRoom(baseUrl, token, id, messages.lastOrNull()?.id ?: 0)
+                }
+                if (payload != null) ingest(payload)
+            } else {
+                error = "Could not send the message."
+            }
+            busy = false
+        }
+    }
+
+    fun askGrid() {
+        val id = room?.id ?: return
+        val text = input.text.trim()
+        if (text.isEmpty() || busy || asking) return
+        input = TextFieldValue("")
+        asking = true
+        error = ""
+        scope.launch {
+            withContext(Dispatchers.IO) {
+                postDnaMessage(baseUrl, token, id, "user", "chat", text)
+            }
+            val transcript = messages.takeLast(12).joinToString("\n") {
+                "${it.sender.uppercase()}: ${it.content}"
+            }
+            val prompt = buildString {
+                appendLine("You are GRID in a DNA room with OpenCode and the user.")
+                appendLine("Reply briefly and conversationally to the latest message.")
+                appendLine("Do not call tools unless the user explicitly asks for one.")
+                appendLine()
+                appendLine("Room transcript:")
+                appendLine(transcript)
+                appendLine()
+                appendLine("USER: $text")
+                append("GRID:")
+            }
+            val reply = StringBuilder()
+            try {
+                client.run(prompt, "dna-$id").collect { event ->
+                    if (event is GridEvent.TextDelta) reply.append(event.delta)
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (failure: Exception) {
+                error = "GRID reply failed: ${failure.message ?: "unknown error"}"
+            }
+            val answer = reply.toString().trim()
+            if (answer.isNotBlank()) {
+                withContext(Dispatchers.IO) {
+                    postDnaMessage(baseUrl, token, id, "grid", "answer", answer)
+                }
+            }
+            val payload = withContext(Dispatchers.IO) {
+                fetchDnaRoom(baseUrl, token, id, messages.lastOrNull()?.id ?: 0)
+            }
+            if (payload != null) ingest(payload)
+            asking = false
+        }
+    }
+
+    Column(Modifier.fillMaxSize().padding(18.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text("DNA", color = GridGreen, fontSize = 26.sp, fontWeight = FontWeight.Bold)
+                Text(
+                    "SUPERVISED EVOLUTION · LEVEL 1",
+                    color = Muted,
+                    fontSize = 10.sp,
+                    letterSpacing = 1.5.sp,
+                )
+            }
+            Column(horizontalAlignment = Alignment.End) {
+                Text(
+                    room?.status?.uppercase() ?: if (loading) "CONNECTING" else "IDLE",
+                    color = Warning,
+                    fontSize = 10.sp,
+                    fontFamily = FontFamily.Monospace,
+                )
+                Text(
+                    "generation ${room?.generation ?: 0}",
+                    color = Muted,
+                    fontSize = 10.sp,
+                    fontFamily = FontFamily.Monospace,
+                )
+            }
+            Spacer(Modifier.width(12.dp))
+            OutlinedButton(onClick = onClose) { Text("Back to chat", fontSize = 10.sp) }
+        }
+
+        Spacer(Modifier.height(10.dp))
+        Surface(
+            color = PanelRaised,
+            shape = RoundedCornerShape(8.dp),
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Row(
+                Modifier.padding(horizontal = 10.dp, vertical = 7.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    room?.let { "${it.title} · ${it.id}" } ?: "Opening room…",
+                    color = GridGreenDim,
+                    fontSize = 10.sp,
+                    fontFamily = FontFamily.Monospace,
+                    modifier = Modifier.weight(1f),
+                )
+                Text(
+                    "OpenCode: dna_cli.py",
+                    color = Muted,
+                    fontSize = 9.sp,
+                    fontFamily = FontFamily.Monospace,
+                )
+            }
+        }
+
+        Spacer(Modifier.height(10.dp))
+        Box(Modifier.weight(1f).fillMaxWidth()) {
+            if (loading) {
+                Row(
+                    Modifier.align(Alignment.Center),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(16.dp),
+                        color = GridGreen,
+                        strokeWidth = 2.dp,
+                    )
+                    Spacer(Modifier.width(10.dp))
+                    Text("Opening the DNA room…", color = Muted, fontSize = 12.sp)
+                }
+            } else {
+                LazyColumn(
+                    state = listState,
+                    modifier = Modifier.fillMaxSize().padding(end = 12.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    itemsIndexed(messages) { _, message ->
+                        DnaMessageCard(message)
+                    }
+                }
+                VerticalScrollbar(
+                    adapter = rememberScrollbarAdapter(listState),
+                    modifier = Modifier.align(Alignment.CenterEnd).fillMaxHeight(),
+                )
+            }
+        }
+
+        if (error.isNotBlank()) {
+            Text(error, color = Danger, fontSize = 10.sp, modifier = Modifier.padding(top = 6.dp))
+        }
+        if (asking) {
+            Row(
+                Modifier.padding(top = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(12.dp),
+                    color = GridGreen,
+                    strokeWidth = 2.dp,
+                )
+                Spacer(Modifier.width(8.dp))
+                Text("GRID is replying into the room…", color = GridGreenDim, fontSize = 10.sp)
+            }
+        }
+
+        Spacer(Modifier.height(8.dp))
+        Row(verticalAlignment = Alignment.Bottom) {
+            OutlinedTextField(
+                value = input,
+                onValueChange = { input = it },
+                modifier = Modifier.weight(1f),
+                placeholder = { Text("Message the room…", color = Muted) },
+                maxLines = 3,
+            )
+            Spacer(Modifier.width(8.dp))
+            Button(
+                onClick = { sendUserMessage() },
+                enabled = !busy && !asking && input.text.isNotBlank(),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = PanelRaised,
+                    contentColor = GridGreen,
+                ),
+            ) { Text("Send") }
+            Spacer(Modifier.width(6.dp))
+            Button(
+                onClick = { askGrid() },
+                enabled = !busy && !asking && input.text.isNotBlank(),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = GridGreen,
+                    contentColor = Color.Black,
+                ),
+            ) { Text("Ask GRID") }
+        }
+    }
+}
+
+@Composable
+private fun DnaMessageCard(message: DnaMessage) {
+    val senderColor = when (message.sender) {
+        "user" -> GridGreen
+        "grid" -> GridGreenDim
+        "opencode" -> Warning
+        else -> Muted
+    }
+    Row(
+        Modifier.fillMaxWidth(),
+        horizontalArrangement = if (message.sender == "user") Arrangement.End else Arrangement.Start,
+    ) {
+        Surface(
+            color = if (message.sender == "user") Color(0xFF123326) else PanelRaised,
+            shape = RoundedCornerShape(10.dp),
+            modifier = Modifier.fillMaxWidth(0.86f),
+        ) {
+            Column(Modifier.padding(start = 10.dp, end = 5.dp, top = 6.dp, bottom = 8.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        message.sender.uppercase(),
+                        color = senderColor,
+                        fontSize = 9.sp,
+                        letterSpacing = 1.sp,
+                        fontFamily = FontFamily.Monospace,
+                    )
+                    if (message.kind != "chat") {
+                        Spacer(Modifier.width(6.dp))
+                        Text(
+                            message.kind.uppercase(),
+                            color = Warning,
+                            fontSize = 8.sp,
+                            fontFamily = FontFamily.Monospace,
+                        )
+                    }
+                    Spacer(Modifier.weight(1f))
+                    Text(
+                        message.timestamp.takeLast(8),
+                        color = Muted,
+                        fontSize = 8.sp,
+                        fontFamily = FontFamily.Monospace,
+                    )
+                    CopyButton(message.content)
+                }
+                Text(
+                    message.content,
+                    color = Color.White,
+                    fontSize = 12.sp,
+                    lineHeight = 17.sp,
+                    modifier = Modifier.padding(end = 6.dp),
+                )
+            }
+        }
+    }
+}
+
+@Composable
 private fun Sidebar(
     status: String,
     threadId: String,
@@ -1942,6 +2286,7 @@ private fun Sidebar(
     onModelChange: (String) -> Unit,
     onProviderChange: () -> Unit,
     onPairPhone: () -> Unit,
+    onDnaRoom: () -> Unit,
     onThreadOpen: (String) -> Unit,
     onRefreshThreads: () -> Unit,
     onClearHistory: () -> Unit,
@@ -2052,6 +2397,11 @@ private fun Sidebar(
             onClick = onPairPhone,
             modifier = Modifier.fillMaxWidth(),
         ) { Text("Pair phone", fontSize = 11.sp) }
+        Spacer(Modifier.height(8.dp))
+        OutlinedButton(
+            onClick = onDnaRoom,
+            modifier = Modifier.fillMaxWidth(),
+        ) { Text("DNA Room", fontSize = 11.sp, color = GridGreen) }
         Spacer(Modifier.height(10.dp))
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text("HISTORY", color = Muted, fontSize = 10.sp, letterSpacing = 1.5.sp)
@@ -3606,6 +3956,140 @@ private fun fetchPairingInfo(
     } finally {
         connection.disconnect()
     }
+}
+
+private data class DnaRoom(
+    val id: String,
+    val title: String,
+    val status: String,
+    val generation: Int,
+    val messageCount: Int,
+    val updatedAt: String,
+)
+
+private data class DnaMessage(
+    val id: Int,
+    val sender: String,
+    val kind: String,
+    val content: String,
+    val timestamp: String,
+)
+
+private data class DnaRoomPayload(
+    val room: DnaRoom,
+    val messages: List<DnaMessage>,
+)
+
+private fun dnaHttpJson(
+    url: String,
+    token: String,
+    method: String = "GET",
+    body: String? = null,
+): JsonObject? {
+    return try {
+        val connection = URI.create(url).toURL().openConnection() as HttpURLConnection
+        connection.requestMethod = method
+        connection.setRequestProperty("Authorization", "Bearer $token")
+        connection.connectTimeout = 3000
+        connection.readTimeout = 10000
+        if (body != null) {
+            connection.doOutput = true
+            connection.setRequestProperty("Content-Type", "application/json")
+            connection.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
+        }
+        try {
+            if (connection.responseCode !in 200..299) {
+                null
+            } else {
+                Json.parseToJsonElement(
+                    connection.inputStream.bufferedReader().readText()
+                ).jsonObject
+            }
+        } finally {
+            connection.disconnect()
+        }
+    } catch (_: Exception) {
+        null
+    }
+}
+
+private fun dnaRoomFrom(element: JsonElement?): DnaRoom? {
+    val item = element?.jsonObject ?: return null
+    val id = item["id"]?.jsonPrimitive?.contentOrNull ?: return null
+    return DnaRoom(
+        id = id,
+        title = item["title"]?.jsonPrimitive?.contentOrNull ?: "DNA room",
+        status = item["status"]?.jsonPrimitive?.contentOrNull ?: "idle",
+        generation = item["generation"]?.jsonPrimitive?.intOrNull ?: 0,
+        messageCount = item["message_count"]?.jsonPrimitive?.intOrNull ?: 0,
+        updatedAt = item["updated_at"]?.jsonPrimitive?.contentOrNull ?: "",
+    )
+}
+
+private fun dnaMessageFrom(element: JsonElement?): DnaMessage? {
+    val item = element?.jsonObject ?: return null
+    val id = item["id"]?.jsonPrimitive?.intOrNull ?: return null
+    return DnaMessage(
+        id = id,
+        sender = item["sender"]?.jsonPrimitive?.contentOrNull ?: "system",
+        kind = item["kind"]?.jsonPrimitive?.contentOrNull ?: "chat",
+        content = item["content"]?.jsonPrimitive?.contentOrNull ?: "",
+        timestamp = item["timestamp"]?.jsonPrimitive?.contentOrNull ?: "",
+    )
+}
+
+private fun fetchDnaRooms(baseUrl: String, token: String): List<DnaRoom>? {
+    val root = dnaHttpJson("$baseUrl/api/v1/dna/rooms", token) ?: return null
+    val array = root["rooms"]?.jsonArray ?: return emptyList()
+    return array.mapNotNull { dnaRoomFrom(it) }
+}
+
+private fun createDnaRoom(
+    baseUrl: String,
+    token: String,
+    title: String,
+): DnaRoom? {
+    val body = buildJsonObject { put("title", title) }.toString()
+    val root = dnaHttpJson("$baseUrl/api/v1/dna/rooms", token, "POST", body) ?: return null
+    return dnaRoomFrom(root["room"])
+}
+
+private fun fetchDnaRoom(
+    baseUrl: String,
+    token: String,
+    roomId: String,
+    after: Int,
+): DnaRoomPayload? {
+    val root = dnaHttpJson(
+        "$baseUrl/api/v1/dna/rooms/$roomId?after=$after",
+        token,
+    ) ?: return null
+    val room = dnaRoomFrom(root["room"]) ?: return null
+    val messages = root["messages"]?.jsonArray
+        ?.mapNotNull { dnaMessageFrom(it) }
+        ?: emptyList()
+    return DnaRoomPayload(room, messages)
+}
+
+private fun postDnaMessage(
+    baseUrl: String,
+    token: String,
+    roomId: String,
+    sender: String,
+    kind: String,
+    content: String,
+): Boolean {
+    val body = buildJsonObject {
+        put("sender", sender)
+        put("kind", kind)
+        put("content", content)
+    }.toString()
+    return dnaHttpJson(
+        "$baseUrl/api/v1/dna/rooms/$roomId/messages",
+        token,
+        "POST",
+        body,
+    ) != null
 }
 
 private fun postProviderModels(

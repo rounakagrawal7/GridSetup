@@ -11,6 +11,7 @@ import requests
 
 import grid_agent
 from grid_api import DiscoveryResponder, GridAPIServer, PairingManager, ThreadStore
+from grid_dna import DnaStore
 from grid_agent import Tools
 
 
@@ -47,6 +48,7 @@ class APITestCase(unittest.TestCase):
             host="127.0.0.1",
             port=0,
             thread_store=ThreadStore(self.root / "threads.json"),
+            dna_store=DnaStore(self.root / "dna"),
             refs_dir=self.refs,
         )
         self.assertTrue(self.server.start())
@@ -99,6 +101,63 @@ class APITestCase(unittest.TestCase):
         self.assertTrue(payload["ok"])
         self.assertEqual(payload["protocol"], "1.0")
         self.assertEqual(payload["model"], "fake-model")
+
+    def test_dna_room_roundtrip(self):
+        created = requests.post(
+            f"{self.base}/dna/rooms",
+            json={"title": "DNA test"},
+            headers=self.headers,
+            timeout=5,
+        )
+        self.assertEqual(created.status_code, 200)
+        room_id = created.json()["room"]["id"]
+
+        sent = requests.post(
+            f"{self.base}/dna/rooms/{room_id}/messages",
+            json={
+                "sender": "opencode",
+                "kind": "chat",
+                "content": "hello from opencode",
+            },
+            headers=self.headers,
+            timeout=5,
+        )
+        self.assertEqual(sent.status_code, 200)
+        self.assertEqual(sent.json()["message"]["id"], 1)
+
+        fetched = requests.get(
+            f"{self.base}/dna/rooms/{room_id}",
+            headers=self.headers,
+            timeout=5,
+        ).json()
+        self.assertEqual(fetched["room"]["title"], "DNA test")
+        self.assertEqual(len(fetched["messages"]), 1)
+        self.assertEqual(fetched["messages"][0]["content"], "hello from opencode")
+
+        after = requests.get(
+            f"{self.base}/dna/rooms/{room_id}?after=1",
+            headers=self.headers,
+            timeout=5,
+        ).json()
+        self.assertEqual(after["messages"], [])
+
+        status = requests.post(
+            f"{self.base}/dna/rooms/{room_id}/status",
+            json={"status": "testing", "generation": 2},
+            headers=self.headers,
+            timeout=5,
+        )
+        self.assertEqual(status.status_code, 200)
+        self.assertEqual(status.json()["room"]["status"], "testing")
+        self.assertEqual(status.json()["room"]["generation"], 2)
+
+        bad = requests.post(
+            f"{self.base}/dna/rooms/{room_id}/messages",
+            json={"sender": "nobody", "kind": "chat", "content": "x"},
+            headers=self.headers,
+            timeout=5,
+        )
+        self.assertEqual(bad.status_code, 400)
 
     def test_tools_endpoint_lists_registry(self):
         payload = requests.get(f"{self.base}/tools", headers=self.headers).json()

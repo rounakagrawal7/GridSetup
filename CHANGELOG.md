@@ -36,6 +36,13 @@
   backtick markers and `*` bullets are normalized to `- `, so the terminal,
   desktop and Android clients no longer show `**Projects & Setup:**` or
   `*   item` artifacts.
+- New DNA bus and Level 1 room: `grid_dna.py` stores `refs/dna/rooms/<id>/`
+  messages, exposes `/api/v1/dna/*`, and ships `dna_cli.py` for agents. The
+  desktop has a **DNA Room** workspace (also `/dna`) where user, GRID and
+  OpenCode messages appear live; **Ask GRID** posts a reply into the room.
+  Message-only: the room cannot execute tools or edit code. See
+  `docs/ADR-0003-dna-evolution.md`; Level 2 proposals/review/verification are
+  next.
 - Social routing fixes: "social history" now goes to the `social` tool before
   web search, inputs work with or without the `social`/`moltbook` prefix, and
   tool calls with the argument on the `TOOL_CALL:` line parse correctly. Prompt

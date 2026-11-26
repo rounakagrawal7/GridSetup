@@ -1,0 +1,139 @@
+# ADR-0003: DNA — supervised evolution between GRID and OpenCode
+
+- Status: Accepted — Level 1 bus/room implemented; Level 2 proposals next
+- Date: 2026-11-27
+- Owners: Rounak, GRID, OpenCode
+- Scope: Level 1 (visible room) and Level 2 (skill adoption). Level 3 (core-code evolution) is explicitly out of scope.
+
+## Context
+
+Herdr-style orchestration shows that agents become more useful when they can see each other's state and hand work to each other. GRID already has a local host, threads, tool events, approvals, memory, desktop and Android clients. It does not yet have a governed way for another agent to help it grow.
+
+The goal is not unrestricted self-modification. The goal is a visible collaboration loop with a human selector: GRID observes a gap, asks OpenCode for help, OpenCode proposes a change, tests run, the user approves, and only then does GRID inherit it.
+
+## Vocabulary
+
+- **DNA** — the shared genome/contract: code, prompts, tools, skills, config schema and memory schema. Not user memory contents or secrets.
+- **Evolution** — the loop: observe → ask → propose → test → approve → adopt → record.
+- **Selector** — the human who approves or rejects a mutation.
+- **Editor** — OpenCode, which proposes answers, skills or (later) patches.
+- **Learner/operator** — GRID, which detects gaps, tests proposals and adopts approved capabilities.
+
+## Decisions
+
+### 1. Transport: local DNA Bus
+
+A loopback HTTP/JSON bus with a JSONL audit log. v0 clients poll every 1.5 s; SSE is a later enhancement.
+
+- `POST /api/v1/dna/rooms` creates a room.
+- `POST /api/v1/dna/rooms/<id>/messages` appends a message.
+- `GET /api/v1/dna/rooms` lists rooms.
+- `GET /api/v1/dna/rooms/<id>?after=<n>` returns room metadata and new messages.
+- `POST /api/v1/dna/rooms/<id>/status` updates status/generation.
+- A small `dna_cli.py` lets any agent send/read messages from a shell.
+- Messages are persisted under `refs/dna/rooms/<id>/` (`room.json`, `messages.jsonl`).
+- The bus cannot invoke GRID tools. It only carries chat, proposals, verification and approval events.
+
+MCP may be added later as an adapter. Headless agent spawning per turn is rejected for v0 because it is slow and stateless.
+
+### 2. Room UI: dedicated DNA workspace
+
+Desktop gets a dedicated DNA workspace, not a normal chat thread.
+
+- Left: live conversation between user, GRID and OpenCode.
+- Right (later): evolution timeline with proposals, tests, diffs and approvals.
+- Header: status chip, generation badge, token/turn budget and Stop.
+- Underlying conversation is persisted as a `dna-*` thread and labeled separately from normal history.
+- Android later: notifications plus approve/reject; full room after desktop.
+
+### 3. Skill contract: procedure or tool
+
+Two kinds of proposals:
+
+| Kind | Files | Risk |
+|---|---|---|
+| `procedure` | `skills/<name>/SKILL.md`, `manifest.json`, `tests/` | instructions only |
+| `tool` | the above plus `skills/<name>.py` | executable code |
+
+`manifest.json` must include name, version, kind, description, inputs, outputs, permissions, dependencies, author/session, proposal ID and SHA256 hashes.
+
+`tool` rules for v0:
+
+- `def run(input: str) -> str`
+- Python stdlib only
+- no network, subprocess, filesystem writes, `eval`/`exec`, `ctypes`, `importlib` or pickle
+- deterministic, handles bad input, max 2 s runtime and 64 KB output
+- at least one happy-path and one error-path test
+- static AST scan plus tests in a temporary copy
+
+Core-code changes are Level 3 and never part of a skill proposal.
+
+### 4. Approval UX: Proposal Review
+
+A dedicated review screen, not the generic approval card:
+
+- summary and rationale
+- files/diff
+- test results
+- permissions/risk
+- example input and output
+- Approve / Reject / Request changes
+
+Approval events still feed the existing notification/queue system. Android later gets a summary plus Approve/Reject.
+
+### 5. Generation record: genome manifest
+
+Every adoption writes `refs/dna/generations/<n>/genome.json`:
+
+- generation and parent generation
+- git commit SHA
+- hashes of skills, system prompt, config schema, tool registry count and memory schema
+- skill versions/hashes
+- proposal ID, approver, timestamp, rationale
+- test summary
+- rollback pointer
+
+The genome excludes user memory contents, credentials and runtime data.
+
+## Verification contract
+
+After a skill is applied, GRID runs `dna verify` and sends the result to OpenCode:
+
+- expected vs actual paths
+- SHA256 per file
+- `SKILL.md` parses and name matches the folder
+- `manifest.json` is valid
+- executable skills import and expose `run()`
+- tests pass
+- skill appears in `skill_search` and the registry/index
+- `git status --porcelain` changes only allowed skill paths
+
+A failed verification rolls back the adoption. Only a passing verification increments the generation.
+
+## Guardrails
+
+- The human selector approves; OpenCode never merges.
+- Never edit the live running copy; stage, test, then apply.
+- No autonomous merges.
+- Budget and turn limits; `/dna stop` kills the loop.
+- Audit every message, proposal, test, approval and rollback.
+- The DNA bus does not inherit GRID's dangerous tool permissions.
+- Separate DNA credentials are planned; v0 uses the local API token.
+
+## Implementation status (v0)
+
+- `grid_dna.py` store, `/api/v1/dna/*` endpoints, `dna_cli.py` and a desktop **DNA Room** workspace are implemented.
+- Level 1 conversation works: user/GRID/OpenCode messages, room persistence, polling, and **Ask GRID**.
+- Proposal and verification message kinds are stored and update room status, but the review/apply/verify workflow is not built yet.
+- SSE, a separate DNA credential, Android room UI and the right-hand evolution panel are pending.
+
+## MVP acceptance
+
+1. `/dna` opens the workspace and room.
+2. User, GRID and OpenCode messages appear live.
+3. OpenCode can send a message via `dna_cli.py`.
+4. GRID can reply into the room.
+5. Room state and transcript persist across restarts.
+6. No core files are modified by the room.
+
+Level 2 adds the skill proposal, review, apply and verification loop.

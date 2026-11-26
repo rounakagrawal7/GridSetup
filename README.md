@@ -625,6 +625,24 @@ The setup screen has no URL or API-token fields. The app stores the host token e
 - Discovery uses a UDP broadcast on port **8772**; allow it through the firewall if the phone cannot find the host. The emulator is probed at `10.0.2.2` automatically.
 - LAN exposure should be token-protected; cleartext HTTP is allowed in this development build.
 
+#### DNA room (Level 1)
+
+A shared room where you, GRID and OpenCode can talk. It is message-only: the room never executes GRID tools, and Level 1 cannot modify code.
+
+- Desktop: click **DNA Room** in the sidebar or type `/dna`.
+- The desktop opens the most recent room, or creates `GRID x OpenCode`.
+- GRID replies into the room with **Ask GRID**; user/OpenCode messages are persisted.
+- Headless/agent use:
+
+```powershell
+python dna_cli.py rooms
+python dna_cli.py create --title "GRID x OpenCode"
+python dna_cli.py send --room dna-xxxxxxxx --from opencode --content "hello"
+python dna_cli.py read --room dna-xxxxxxxx
+```
+
+Messages live under `refs/dna/rooms/<id>/`. Level 2 skill proposals, review, verification and generation records are next. See `docs/ADR-0003-dna-evolution.md`.
+
 #### Build details
 
 - The AG-UI Kotlin SDK and Compose clients compile and run on **Java 21**.
@@ -908,7 +926,7 @@ cd clients
 .\gradlew.bat :shared:jvmTest :desktopApp:compileKotlin :androidApp:assembleDebug :androidApp:testDebugUnitTest
 ```
 
-Current suite: **179 tests**, **14 Android tests**, **51/51 routing evals**, desktop compile, Android debug APK, and an Android emulator smoke test (Pixel 8, API 36) covering pairing-only setup, LAN discovery, the Thinking/counter activity line, first-run setup, streaming chat, tool cards, command/subcommand autocomplete, server-command routing, new-thread reset, history replay, model switching, copy buttons, full-chat copy, the token meter and token persistence across an app restart.
+Current suite: **183 tests**, **14 Android tests**, **51/51 routing evals**, desktop compile, Android debug APK, and an Android emulator smoke test (Pixel 8, API 36) covering pairing-only setup, LAN discovery, the Thinking/counter activity line, first-run setup, streaming chat, tool cards, command/subcommand autocomplete, server-command routing, new-thread reset, history replay, model switching, copy buttons, full-chat copy, the token meter and token persistence across an app restart.
 
 ## Documentation
 
