@@ -105,6 +105,11 @@ class APITestCase(unittest.TestCase):
         names = {row["name"] for row in payload["tools"]}
         self.assertIn("rea", names)
         self.assertIn("web_search", names)
+        social = next(row for row in payload["tools"] if row["name"] == "social")
+        subcommands = {item["name"] for item in social["subcommands"]}
+        self.assertIn("auto", subcommands)
+        self.assertIn("persona", subcommands)
+        self.assertIn("history", subcommands)
 
     def test_local_command_endpoint(self):
         help_payload = requests.post(

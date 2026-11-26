@@ -510,6 +510,8 @@ class GridAPIServer:
         return 200, {"ok": True, "model": model, "backend": getattr(backend, "type", "")}
 
     def _tools_info(self) -> Dict[str, Any]:
+        from grid_subcommands import subcommands_for
+
         tools = getattr(self.runtime, "Tools", None)
         registry = getattr(tools, "registry", {}) if tools is not None else {}
         enabled = getattr(tools, "enabled", set()) if tools is not None else set()
@@ -518,6 +520,7 @@ class GridAPIServer:
                 "name": name,
                 "description": str(info.get("desc") or ""),
                 "enabled": name in enabled,
+                "subcommands": subcommands_for(name),
             }
             for name, info in registry.items()
         ]
@@ -656,6 +659,44 @@ class GridAPIServer:
         if not ref_id:
             return "Usage: /ref <id> — read an offloaded tool output."
         return recaller.read_ref(ref_id)
+
+    def _cmd_rea(self, args: str) -> str:
+        from grid_rea import authorize_host, list_allowlist, revoke_host
+
+        loader = getattr(self.runtime, "load_config", None)
+        cfg = loader() if callable(loader) else {}
+        security = cfg.get("security") or {}
+        body = args.strip()
+        sub, _, arg = body.partition(" ")
+        sub = sub.lower()
+        if not body or sub in ("help", "status"):
+            return (
+                "GRID REA — authorized passive teardown\n"
+                "  /rea <url>                 inspect a site (must be authorized)\n"
+                "  /rea authorized <url>      one-off explicit authorization\n"
+                "  /rea authorize <host>      add a host to the allowlist\n"
+                "  /rea revoke <host>         remove a host\n"
+                "  /rea list                  show the allowlist\n\n"
+                f"{list_allowlist(security)}"
+            )
+        if sub == "list":
+            return list_allowlist(security)
+        if sub in ("authorize", "revoke"):
+            host = arg.strip()
+            if not host:
+                return f"Usage: /rea {sub} <host>"
+            fn = authorize_host if sub == "authorize" else revoke_host
+            security, message = fn(security, host)
+            save = getattr(self.runtime, "save_config", None)
+            if callable(save):
+                try:
+                    save({"security": security})
+                except Exception:
+                    pass
+            return message
+        if sub == "authorized":
+            return "Use /rea authorized <url> from the desktop to run a teardown."
+        return "Usage: /rea [authorized <url>|authorize|revoke|list|status|help]"
 
     def _cmd_jobs(self, args: str) -> str:
         tools = getattr(self.runtime, "Tools", None)
@@ -869,6 +910,7 @@ class GridAPIServer:
             "/help": self._cmd_help,
             "/memory": self._cmd_memory,
             "/life": self._cmd_life,
+            "/rea": self._cmd_rea,
             "/plan": self._cmd_plan,
             "/ref": self._cmd_ref,
             "/jobs": self._cmd_jobs,

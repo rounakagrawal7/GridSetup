@@ -51,6 +51,12 @@
   renderer, server-side macros, rich tool and REA findings surfaces, and
   `POST /api/v1/ui/action`. Every surface has a plain-text fallback; Android
   keeps its existing tool card.
+- Slash subcommand autocomplete: `/social ` shows social commands such as
+  `auto`, `engage`, `writeup`, `persona` and `history`; `/ctf`, `/rea`,
+  `/satellite`, `/radio`, `/micro`, `/osint`, `/gcal`, `/gsheet`, `/jobs`,
+  `/life`, `/memory`, `/persona` and `/pb` expose their documented
+  subcommands. `/api/v1/tools` now carries subcommand metadata, and `/rea`
+  routes allowlist commands through the host API.
 - Desktop run activity: while the model works, the chat shows an animated
   **Thinking…** row with elapsed time; tool-using runs replace it with a live
   summary of commands, edits, thoughts, reads and tools.

@@ -232,6 +232,10 @@ Landed:
   emits `CUSTOM grid.ui` for tool results and REA findings; Compose renders the
   tree natively with text fallback. `/api/v1/ui/catalog` and `/ui/action`
   expose the catalog and action channel.
+- Slash subcommands: `grid_subcommands.py` supplies metadata through
+  `/api/v1/tools`; the composer opens a second-level palette after commands
+  with documented subcommands and executes them through the existing API or
+  tool route.
 
 Still open:
 

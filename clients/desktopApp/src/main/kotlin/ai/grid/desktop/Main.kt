@@ -123,10 +123,17 @@ private val Muted = Color(0xFF8A9B8F)
 private val Danger = Color(0xFFFF6B6B)
 private val Warning = Color(0xFFFFD166)
 
+private data class SlashSubcommand(
+    val name: String,
+    val description: String,
+    val template: String? = null,
+)
+
 private data class SlashCommand(
     val name: String,
     val description: String,
     val template: String? = null,
+    val subcommands: List<SlashSubcommand> = emptyList(),
 )
 
 private enum class ToolKind { Command, Edit, Read, Tool }
@@ -160,14 +167,71 @@ private val SLASH_COMMANDS = listOf(
     ),
     SlashCommand("/tools", "List every GRID tool"),
     SlashCommand("/tool", "Run a tool: /tool <name> <input>", template = "/tool "),
-    SlashCommand("/memory", "Recall, add facts, show profile"),
-    SlashCommand("/life", "Status, goals, commitments, tick"),
+    SlashCommand(
+        "/memory",
+        "Recall, add facts, show profile",
+        subcommands = listOf(
+            SlashSubcommand("status", "Show memory status"),
+            SlashSubcommand("profile", "Show the user profile"),
+            SlashSubcommand("add", "Teach a fact: <fact>", "add "),
+            SlashSubcommand("forget", "Remove a fact: <text>", "forget "),
+            SlashSubcommand("build-profile", "Rebuild from previous chats"),
+            SlashSubcommand("clear-profile", "Clear the profile"),
+            SlashSubcommand("clear", "Clear layered memory"),
+        ),
+    ),
+    SlashCommand(
+        "/life",
+        "Status, goals, commitments, tick",
+        subcommands = listOf(
+            SlashSubcommand("status", "Current autopilot state"),
+            SlashSubcommand("log", "Recent activity: [n]", "log "),
+            SlashSubcommand("goals", "Active goals"),
+            SlashSubcommand("goal", "add <title> | done <id>", "goal "),
+            SlashSubcommand("commitments", "Open commitments"),
+            SlashSubcommand("commitment", "add/done", "commitment "),
+            SlashSubcommand("pause", "Pause autonomous work"),
+            SlashSubcommand("resume", "Resume autonomous work"),
+            SlashSubcommand("identity", "Show persona and identity"),
+            SlashSubcommand("tick", "Run one autonomous cycle"),
+            SlashSubcommand("awake", "Awake run (terminal): [task]", "awake "),
+        ),
+    ),
     SlashCommand("/plan", "Toggle planner mode"),
     SlashCommand("/ref", "Read an offloaded tool output", template = "/ref "),
-    SlashCommand("/jobs", "List/show/toggle dynamic skills"),
-    SlashCommand("/persona", "View or set GRID persona"),
+    SlashCommand(
+        "/jobs",
+        "List/show/toggle dynamic skills",
+        subcommands = listOf(
+            SlashSubcommand("list", "List dynamic skills"),
+            SlashSubcommand("show", "Show a skill: <name>", "show "),
+            SlashSubcommand("toggle", "Enable/disable: <name>", "toggle "),
+            SlashSubcommand("new", "Create a skill (terminal)"),
+            SlashSubcommand("edit", "Edit a skill (terminal): <name>", "edit "),
+            SlashSubcommand("delete", "Delete a skill (terminal): <name>", "delete "),
+        ),
+    ),
+    SlashCommand(
+        "/persona",
+        "View or set GRID persona",
+        subcommands = listOf(
+            SlashSubcommand("set", "Set persona: <name>", "set "),
+            SlashSubcommand("clear", "Clear the persona"),
+            SlashSubcommand("status", "Show the current persona"),
+        ),
+    ),
     SlashCommand("/social", "Moltbook social platform"),
-    SlashCommand("/pb", "PocketBase status/start/stop/sync"),
+    SlashCommand(
+        "/pb",
+        "PocketBase status/start/stop/sync",
+        subcommands = listOf(
+            SlashSubcommand("status", "PocketBase status"),
+            SlashSubcommand("start", "Start PocketBase"),
+            SlashSubcommand("stop", "Stop PocketBase"),
+            SlashSubcommand("install", "Download the binary"),
+            SlashSubcommand("sync", "Sync memory to PocketBase"),
+        ),
+    ),
     SlashCommand("/export", "Export server chat (json/txt/html)"),
     SlashCommand("/save", "Save server conversation memory"),
     SlashCommand("/comms", "Communication tools reference"),
@@ -858,15 +922,17 @@ private fun App(
                 }
             }
             name == "/rea" -> {
-                if (args.isBlank()) {
-                    items.add(Item.Note("Usage: /rea authorized <url>"))
-                } else {
-                    val target = if (args.startsWith("authorized ")) {
-                        args
-                    } else {
-                        "authorized $args"
-                    }
-                    send("rea $target")
+                when {
+                    args.isBlank() -> items.add(
+                        Item.Note("Usage: /rea authorized <url> | authorize|revoke|list|status")
+                    )
+                    args == "list" ||
+                        args == "status" ||
+                        args == "help" ||
+                        args.startsWith("authorize ") ||
+                        args.startsWith("revoke ") -> runServerCommand("/rea $args")
+                    args.startsWith("authorized ") -> send("rea $args")
+                    else -> send("rea authorized $args")
                 }
             }
             name in SERVER_COMMANDS -> runServerCommand(command)
@@ -2727,6 +2793,13 @@ private fun NoteCard(message: String) {
     }
 }
 
+private data class PaletteEntry(
+    val label: String,
+    val description: String,
+    val applyText: String,
+    val executeText: String? = null,
+)
+
 @Composable
 private fun Composer(
     input: TextFieldValue,
@@ -2741,43 +2814,104 @@ private fun Composer(
     onStop: () -> Unit,
 ) {
     val text = input.text
-    val allCommands = (
-        SLASH_COMMANDS +
-            tools.map {
-                SlashCommand(
-                    "/${it.name}",
-                    it.description,
-                    template = "/${it.name} ",
-                )
-            }
-        ).distinctBy { it.name }
-    val query = text.removePrefix("/").substringBefore(" ").trim()
+    val toolCommands = tools.map {
+        SlashCommand(
+            "/${it.name}",
+            it.description,
+            template = "/${it.name} ",
+            subcommands = it.subcommands,
+        )
+    }
+    val allCommands = (SLASH_COMMANDS + toolCommands)
+        .groupBy { it.name.lowercase() }
+        .map { (_, group) ->
+            val app = group.first()
+            val withSubs = group.firstOrNull { it.subcommands.isNotEmpty() }
+            app.copy(
+                subcommands = if (app.subcommands.isNotEmpty()) {
+                    app.subcommands
+                } else {
+                    withSubs?.subcommands ?: emptyList()
+                }
+            )
+        }
+    val trimmed = text.trimStart()
+    val startsWithSlash = trimmed.startsWith("/")
+    val commandName = trimmed.substringBefore(" ")
+    val afterCommand = trimmed.substringAfter(" ", "").trimStart()
+    val activeCommand = allCommands.firstOrNull {
+        it.name.equals(commandName, ignoreCase = true)
+    }
+    val hasSpace = trimmed.contains(" ")
+    val showCommandMode = startsWithSlash && !hasSpace
+    val showSubMode = startsWithSlash &&
+        hasSpace &&
+        activeCommand != null &&
+        !afterCommand.contains(" ")
+    val filteredCommands = allCommands.filter {
+        it.name.removePrefix("/").startsWith(
+            commandName.removePrefix("/"),
+            ignoreCase = true,
+        )
+    }
+    val filteredSubcommands = if (showSubMode) {
+        activeCommand.subcommands.filter {
+            it.name.startsWith(afterCommand, ignoreCase = true)
+        }
+    } else {
+        emptyList()
+    }
     var dismissed by remember { mutableStateOf(false) }
     var selected by remember { mutableStateOf(0) }
     val suggestionState = rememberLazyListState()
-    val filtered = allCommands.filter {
-        it.name.removePrefix("/").startsWith(query, ignoreCase = true)
+    val suggestions: List<PaletteEntry> = when {
+        showCommandMode -> filteredCommands.map { command ->
+            PaletteEntry(
+                label = command.name,
+                description = command.description,
+                applyText = if (command.subcommands.isNotEmpty()) {
+                    "${command.name} "
+                } else {
+                    command.template ?: "${command.name} "
+                },
+                executeText = if (command.template == null && command.subcommands.isEmpty()) {
+                    command.name
+                } else {
+                    null
+                },
+            )
+        }
+        showSubMode -> filteredSubcommands.map { sub ->
+            val args = sub.template
+            PaletteEntry(
+                label = sub.name,
+                description = sub.description,
+                applyText = if (args != null) {
+                    "${commandName} $args"
+                } else {
+                    "$commandName ${sub.name} "
+                },
+                executeText = if (args == null) "$commandName ${sub.name}" else null,
+            )
+        }
+        else -> emptyList()
     }
-    val showSuggestions = text.startsWith("/") &&
-        !text.contains(" ") &&
-        !dismissed &&
-        filtered.isNotEmpty()
+    val showSuggestions = !dismissed && suggestions.isNotEmpty()
 
-    LaunchedEffect(query) {
+    LaunchedEffect(text) {
         selected = 0
         dismissed = false
-        if (showSuggestions) suggestionState.scrollToItem(0)
+        if (suggestions.isNotEmpty()) suggestionState.scrollToItem(0)
     }
 
-    LaunchedEffect(selected, showSuggestions) {
-        if (showSuggestions && filtered.isNotEmpty()) {
-            suggestionState.animateScrollToItem(selected.coerceIn(0, filtered.lastIndex))
+    LaunchedEffect(selected, suggestions.size) {
+        if (suggestions.isNotEmpty()) {
+            suggestionState.animateScrollToItem(selected.coerceIn(0, suggestions.lastIndex))
         }
     }
 
-    fun apply(command: SlashCommand) {
-        val next = command.template ?: "${command.name} "
-        onInput(TextFieldValue(next, TextRange(next.length)))
+    fun apply(entry: PaletteEntry) {
+        onInput(TextFieldValue(entry.applyText, TextRange(entry.applyText.length)))
         selected = 0
         dismissed = false
     }
@@ -2792,7 +2926,11 @@ private fun Composer(
                 Column(Modifier.padding(6.dp)) {
                     Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 3.dp)) {
                         Text(
-                            "COMMANDS · ${filtered.size}/${allCommands.size}",
+                            if (showSubMode) {
+                                "SUBCOMMANDS · $commandName · ${suggestions.size}"
+                            } else {
+                                "COMMANDS · ${suggestions.size}/${allCommands.size}"
+                            },
                             color = GridGreen,
                             fontSize = 9.sp,
                             letterSpacing = 1.2.sp,
@@ -2804,7 +2942,7 @@ private fun Composer(
                         state = suggestionState,
                         modifier = Modifier.fillMaxWidth().heightIn(max = 280.dp),
                     ) {
-                        itemsIndexed(filtered) { index, command ->
+                        itemsIndexed(suggestions) { index, entry ->
                             Row(
                                 Modifier
                                     .fillMaxWidth()
@@ -2812,18 +2950,18 @@ private fun Composer(
                                         if (index == selected) Color(0xFF173B27) else Color.Transparent,
                                         RoundedCornerShape(6.dp),
                                     )
-                                    .clickable { apply(command) }
+                                    .clickable { apply(entry) }
                                     .padding(horizontal = 8.dp, vertical = 7.dp),
                                 verticalAlignment = Alignment.CenterVertically,
                             ) {
                                 Text(
-                                    command.name,
+                                    entry.label,
                                     color = GridGreen,
                                     fontSize = 12.sp,
                                     fontFamily = FontFamily.Monospace,
                                     modifier = Modifier.width(140.dp),
                                 )
-                                Text("= ${command.description}", color = Muted, fontSize = 11.sp)
+                                Text("= ${entry.description}", color = Muted, fontSize = 11.sp)
                             }
                         }
                     }
@@ -2840,15 +2978,15 @@ private fun Composer(
                     } else if (showSuggestions) {
                         when (event.key) {
                             Key.DirectionDown, Key.NumPadDirectionDown -> {
-                                selected = (selected + 1) % filtered.size
+                                selected = (selected + 1) % suggestions.size
                                 true
                             }
                             Key.DirectionUp, Key.NumPadDirectionUp -> {
-                                selected = (selected - 1 + filtered.size) % filtered.size
+                                selected = (selected - 1 + suggestions.size) % suggestions.size
                                 true
                             }
                             Key.Tab -> {
-                                apply(filtered[selected])
+                                apply(suggestions[selected])
                                 true
                             }
                             Key.Escape -> {
@@ -2859,15 +2997,19 @@ private fun Composer(
                                 if (event.isShiftPressed) {
                                     false
                                 } else {
-                                    val command = filtered[selected]
-                                    if (
-                                        text.trim().equals(command.name, ignoreCase = true) &&
-                                        command.template == null
+                                    val entry = suggestions[selected]
+                                    val current = text.trim()
+                                    if (showSubMode && entry.executeText != null) {
+                                        onCommand(entry.executeText)
+                                        onInput(TextFieldValue(""))
+                                    } else if (
+                                        entry.executeText != null &&
+                                        current.equals(entry.executeText, ignoreCase = true)
                                     ) {
-                                        onCommand(command.name)
+                                        onCommand(current)
                                         onInput(TextFieldValue(""))
                                     } else {
-                                        apply(command)
+                                        apply(entry)
                                     }
                                     true
                                 }
@@ -3012,7 +3154,11 @@ private fun providerNeedsKey(id: String): Boolean =
 
 private data class ModelInfo(val model: String, val models: List<String>)
 
-private data class ToolInfo(val name: String, val description: String)
+private data class ToolInfo(
+    val name: String,
+    val description: String,
+    val subcommands: List<SlashSubcommand> = emptyList(),
+)
 
 private fun fetchTools(baseUrl: String, token: String): List<ToolInfo>? {
     return try {
@@ -3033,7 +3179,17 @@ private fun fetchTools(baseUrl: String, token: String): List<ToolInfo>? {
                         val item = element.jsonObject
                         val name = item["name"]?.jsonPrimitive?.contentOrNull ?: return@mapNotNull null
                         val description = item["description"]?.jsonPrimitive?.contentOrNull ?: ""
-                        ToolInfo(name, description)
+                        val subcommands = item["subcommands"]?.jsonArray?.mapNotNull { subElement ->
+                            val sub = subElement.jsonObject
+                            val subName = sub["name"]?.jsonPrimitive?.contentOrNull
+                                ?: return@mapNotNull null
+                            SlashSubcommand(
+                                name = subName,
+                                description = sub["description"]?.jsonPrimitive?.contentOrNull ?: "",
+                                template = sub["template"]?.jsonPrimitive?.contentOrNull,
+                            )
+                        } ?: emptyList()
+                        ToolInfo(name, description, subcommands)
                     }
             }
         } finally {
