@@ -23,8 +23,8 @@ class ConsistencyTests(unittest.TestCase):
 
     def test_readme_counts(self):
         readme = (ROOT / "README.md").read_text(encoding="utf-8")
-        self.assertIn("81-tool reconnaissance stack", readme)
-        self.assertIn("81-tool registry", readme)
+        self.assertIn("82-tool reconnaissance stack", readme)
+        self.assertIn("82-tool registry", readme)
         self.assertIn("16 capability groups", readme)
         self.assertNotIn("80+ built-in tools", readme)
         self.assertNotIn("70+ built-in tools", readme)
@@ -46,8 +46,8 @@ class ConsistencyTests(unittest.TestCase):
         doc = docx.Document(ROOT / "GRID_Tools_Test_Guide.docx")
         text = "\n".join(p.text for p in doc.paragraphs)
         self.assertIn("GRID v3 Addendum", text)
-        self.assertIn("All 81 tools documented", text)
-        self.assertNotIn("All 70 tools documented", text)
+        self.assertIn("All 82 tools documented", text)
+        self.assertNotIn("All 81 tools documented", text)
         for token in ("/life", "MCP", "skill_search", "document_read", "OpenCode"):
             self.assertIn(token, text)
 

@@ -23,6 +23,14 @@
 - `rea` is classified dangerous, so it always asks. The registry grows to 81
   tools; 25 new tests cover authorization, parsing, redaction, routing and the
   local teardown path (137 tests total, 51 routing evals).
+- New `memory_add` tool (registry now 82) so "remember this" requests are
+  actually written to the profile; explicit "remember ... / ... remember this"
+  phrasing also persists deterministically.
+- Social routing fixes: "social history" now goes to the `social` tool before
+  web search, inputs work with or without the `social`/`moltbook` prefix, and
+  tool calls with the argument on the `TOOL_CALL:` line parse correctly. Prompt
+  rules stop false "I can't post on Moltbook" and unbacked "I noted that"
+  claims.
 - New `--api` host: a loopback AG-UI 1.0 endpoint over HTTP+SSE with bearer
   auth, thread storage, live tool/activity events, approval requests and REA
   report endpoints. The API resolves the live `__main__` tools so events and

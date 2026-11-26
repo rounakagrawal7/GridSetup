@@ -53,6 +53,31 @@ class AutoDetectTests(unittest.TestCase):
     def test_satellite_tools_routes_to_help(self):
         self.assert_call("satellite tools", "satellite", "help")
 
+    def test_social_history_routes_to_social(self):
+        self.assert_call("show me my social history", "social", "history")
+        self.assert_call("review full history of social activities", "social", "history")
+        self.assert_call("search social history", "social", "history")
+
+    def test_social_input_strips_tool_name(self):
+        self.assertEqual(
+            self.orch._clean_tool_input("social", "social history"),
+            "history",
+        )
+        self.assertEqual(
+            self.orch._clean_tool_input("social", "social persona set Tina"),
+            "persona set Tina",
+        )
+
+    def test_parse_tool_call_accepts_inline_argument(self):
+        self.assertEqual(
+            Tools.parse_tool_call("TOOL_CALL: social history\nINPUT: (ignored)"),
+            ("social", "history"),
+        )
+        self.assertEqual(
+            Tools.parse_tool_call("TOOL_CALL: social\nINPUT: social history"),
+            ("social", "social history"),
+        )
+
     def test_synthesis_intent(self):
         self.assertTrue(
             self.orch._wants_synthesis(

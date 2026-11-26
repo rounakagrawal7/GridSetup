@@ -4,9 +4,9 @@
 
 ### General Reconnaissance & Intelligence Dashboard
 
-*Local-first AI agent with a native Compose Desktop app, Android companion, and an 81-tool reconnaissance stack.*
+*Local-first AI agent with a native Compose Desktop app, Android companion, and an 82-tool reconnaissance stack.*
 
-[![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-blue.svg)](https://www.python.org/) [![Tools](https://img.shields.io/badge/81%20Tools-Recon%2FRadio%2FSAT%2FIoT-orange.svg)](README.md) [![Desktop + Android](https://img.shields.io/badge/Desktop%20%2B%20Android-Compose%20Multiplatform-7F52FF.svg)](clients/) [![AG-UI 1.0](https://img.shields.io/badge/AG--UI-1.0-00FF88.svg)](docs/ADR-0002-kmp-agent-ui.md) [![Local-First](https://img.shields.io/badge/Local--First-Optional%20Sync-green.svg)](README.md) [![User Manual](https://img.shields.io/badge/User%20Manual-GRID_Tools_Test_Guide-blueviolet.svg)](GRID_Tools_Test_Guide.docx)
+[![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-blue.svg)](https://www.python.org/) [![Tools](https://img.shields.io/badge/82%20Tools-Recon%2FRadio%2FSAT%2FIoT-orange.svg)](README.md) [![Desktop + Android](https://img.shields.io/badge/Desktop%20%2B%20Android-Compose%20Multiplatform-7F52FF.svg)](clients/) [![AG-UI 1.0](https://img.shields.io/badge/AG--UI-1.0-00FF88.svg)](docs/ADR-0002-kmp-agent-ui.md) [![Local-First](https://img.shields.io/badge/Local--First-Optional%20Sync-green.svg)](README.md) [![User Manual](https://img.shields.io/badge/User%20Manual-GRID_Tools_Test_Guide-blueviolet.svg)](GRID_Tools_Test_Guide.docx)
 
 </div>
 
@@ -229,7 +229,7 @@ Copy-Item config.example.json config.json
 .\.venv\Scripts\python.exe grid_agent.py --no-input
 ```
 
-`--check` verifies Python, the required imports, `config.json`, the Ollama server, the selected model and the 81-tool registry. It does not start PocketBase or touch `grid_data.duckdb`.
+`--check` verifies Python, the required imports, `config.json`, the Ollama server, the selected model and the 82-tool registry. It does not start PocketBase or touch `grid_data.duckdb`.
 
 Useful flags:
 
@@ -239,7 +239,7 @@ Useful flags:
 
 If `--check` fails, fix the FAIL lines it prints. Do not launch until all required checks pass.
 
-If the model says it has no tools, make sure Ollama is running and the model supports at least a 16k context. GRID sets `num_ctx=16384`; a smaller context truncates the 81-tool schema.
+If the model says it has no tools, make sure Ollama is running and the model supports at least a 16k context. GRID sets `num_ctx=16384`; a smaller context truncates the 82-tool schema.
 
 ### Chat input
 
@@ -279,7 +279,7 @@ An explicit `/life pause` still wins. Advanced subcommands (`status`, `log`, `go
 
 GRID Life uses the same identity as `/persona`. If you set `/persona set TinaGrid`, then:
 - `/life` starts as TinaGrid and knows `Moltbook as TinaGrid`;
-- its prompt includes the persona, the persistent Moltbook history, and the full 81-tool registry;
+- its prompt includes the persona, the persistent Moltbook history, and the full 82-tool registry;
 - `/persona clear` resets the life identity to `GRID` and asks again on the next `/life`.
 
 If no persona is set, `/life` asks for a name first. It also asks what to work on if there are no active goals.
@@ -908,7 +908,7 @@ cd clients
 .\gradlew.bat :shared:jvmTest :desktopApp:compileKotlin :androidApp:assembleDebug :androidApp:testDebugUnitTest
 ```
 
-Current suite: **167 tests**, **14 Android tests**, **51/51 routing evals**, desktop compile, Android debug APK, and an Android emulator smoke test (Pixel 8, API 36) covering pairing-only setup, LAN discovery, the Thinking/counter activity line, first-run setup, streaming chat, tool cards, command/subcommand autocomplete, server-command routing, new-thread reset, history replay, model switching, copy buttons, full-chat copy, the token meter and token persistence across an app restart.
+Current suite: **171 tests**, **14 Android tests**, **51/51 routing evals**, desktop compile, Android debug APK, and an Android emulator smoke test (Pixel 8, API 36) covering pairing-only setup, LAN discovery, the Thinking/counter activity line, first-run setup, streaming chat, tool cards, command/subcommand autocomplete, server-command routing, new-thread reset, history replay, model switching, copy buttons, full-chat copy, the token meter and token persistence across an app restart.
 
 ## Documentation
 

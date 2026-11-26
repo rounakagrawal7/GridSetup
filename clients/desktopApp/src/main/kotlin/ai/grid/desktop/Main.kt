@@ -141,8 +141,8 @@ private enum class ToolKind { Command, Edit, Read, Tool }
 private fun toolKind(name: String): ToolKind {
     return when (name.lowercase()) {
         "run_command", "run_code" -> ToolKind.Command
-        "write_file", "delete_file", "create_directory", "save_skill", "delete_skill" ->
-            ToolKind.Edit
+        "write_file", "delete_file", "create_directory", "save_skill", "delete_skill",
+        "memory_add" -> ToolKind.Edit
         "read_file", "document_read", "file_search", "list_directory", "get_cwd",
         "ref_read", "skill_read", "skill_search", "list_skills",
         "memory_recall", "memory_status", "db_query", "db_analytics" ->

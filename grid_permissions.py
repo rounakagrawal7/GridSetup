@@ -13,6 +13,8 @@ READ_ONLY: Set[str] = {
     "db_analytics", "db_query", "dns_lookup", "document_read", "dork", "file_search",
     "get_cwd", "list_directory", "list_skills", "read_file",
     "skill_load", "skill_read", "skill_search", "memory_recall",
+    # memory_add writes only the user profile and is explicitly user-requested.
+    "memory_add",
     "mcp_servers", "mcp_tools", "memory_status", "netstat", "osint",
     "pb_status", "ping", "ref_read", "satellite", "screen_res",
     "system_info", "table", "telegram_status",

@@ -236,7 +236,7 @@ def build_awake_prompt(life, objective: str, notes=None, context: str = "") -> s
         "Windows desktop.\n\n"
         f"{life.identity_text()}\n\n"
         f"Social presence: {social}\n"
-        "You have the full 81-tool GRID registry available. Use a tool when "
+        "You have the full 82-tool GRID registry available. Use a tool when "
         "it helps. You can search and load procedural skills with "
         "skill_search and skill_load; use skill_read for referenced files. "
         "Configured MCP tools are available through mcp_servers, mcp_tools "

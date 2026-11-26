@@ -131,6 +131,21 @@ class MemoryProfileTests(unittest.TestCase):
             )
         self.assertEqual(cleaned, "Answer.")
 
+    def test_explicit_remember_phrases(self):
+        self.assertEqual(
+            GridOrchestrator._explicit_remember("I am your bf remember this"),
+            "I am your bf",
+        )
+        self.assertEqual(
+            GridOrchestrator._explicit_remember("Remember that I prefer tables"),
+            "I prefer tables",
+        )
+        self.assertEqual(
+            GridOrchestrator._explicit_remember("Remember this: I use GRID"),
+            "I use GRID",
+        )
+        self.assertIsNone(GridOrchestrator._explicit_remember("hello"))
+
 
 if __name__ == "__main__":
     unittest.main()

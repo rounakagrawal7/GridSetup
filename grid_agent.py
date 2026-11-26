@@ -4036,6 +4036,22 @@ Comment Data:
             m = re.search(pat, text, re.IGNORECASE | re.DOTALL)
             if m:
                 return m.group(1).strip(), m.group(2).strip()
+        # Some models put the argument on the TOOL_CALL line:
+        #   TOOL_CALL: social history
+        #   INPUT: (ignored)
+        stripped = (text or "").lstrip()
+        if stripped.upper().startswith("TOOL_CALL:"):
+            first_line, _, remainder = stripped.partition("\n")
+            parts = first_line.split(None, 2)
+            if len(parts) >= 2:
+                name = parts[1].strip().strip(":")
+                inline = parts[2].strip() if len(parts) > 2 else ""
+                if name in Tools.registry:
+                    input_match = re.search(
+                        r"(?:INPUT|Input):\s*(.+)", remainder, re.DOTALL
+                    )
+                    fallback_input = input_match.group(1).strip() if input_match else ""
+                    return name, inline or fallback_input or "(ignored)"
         return None
 
     @staticmethod
@@ -4156,6 +4172,12 @@ Comment Data:
         if not ctx:
             return "No stored memory matches that query yet. Keep chatting — memory distills automatically."
         return ctx
+
+    @staticmethod
+    def _memory_add(fact: str = "") -> str:
+        if Tools.recaller is None:
+            return "Memory layer not active (run with duckdb installed)."
+        return Tools.recaller.remember(str(fact or ""))
 
     @staticmethod
     def _memory_status(_unused: str = "") -> str:
@@ -4287,6 +4309,7 @@ Tools._reg("db_analytics",     Tools._db_analytics,    "Show usage analytics for
 Tools._reg("pb_status",         Tools._pb_status,      "Check if PocketBase server is running and show its status.", "(ignored)")
 Tools._reg("pb_sync",           Tools._pb_sync,        "Sync conversation history to PocketBase.", "(ignored)")
 Tools._reg("pb_upload",         Tools._pb_upload,      "Upload a file to PocketBase as an artifact.", "path to file")
+Tools._reg("memory_add",        Tools._memory_add,     "Persist a durable fact or preference the user explicitly asks you to remember. Input is the fact only; never claim to remember something without calling this.", "fact text")
 Tools._reg("memory_recall",     Tools._memory_recall,  "Search GRID's layered memory (persona, facts, scenarios) for context relevant to a query. Use when the user references earlier work or asks 'do you remember'.", "query text")
 Tools._reg("memory_status",     Tools._memory_status,  "Show GRID's memory layer status: count of atoms, scenarios, offloaded refs, persona size.", "(ignored)")
 Tools._reg("ref_read",          Tools._ref_read,       "Read the full offloaded output for a saved tool reference id. Use to recover verbose tool output that was saved to disk.", "ref_id")
@@ -4309,7 +4332,7 @@ Tools._reg("mcp_call",           Tools._mcp_call,         "Call a tool on a conf
 Tools._reg("sherlock_scan",     sherlock_scan,           "Search 400+ social networks for a username with Sherlock (optional binary).", "username")
 Tools._reg("nuclei_scan",       nuclei_scan,             "Run a Nuclei template scan on an authorized target (optional binary). Input must start with 'authorized'.", "authorized <url-or-host>")
 Tools._reg("pio_build",         pio_build,               "Build/upload an ESP32/Arduino project with PlatformIO (optional binary).", "project directory")
-Tools._reg("social",             moltbook_social,         "Moltbook social platform: persona, register, profile, post, reply, feed, search, vote, submolts, follow, agents, switch, auto, auto-daemon, writeup, history. All actions auto-logged. Use 'social help' for full reference.", "'social persona set MyName' or 'social auto' or 'social history' or 'social feed hot 10' or 'social writeup'")
+Tools._reg("social",             moltbook_social,         "Moltbook social platform: persona, register, profile, post, reply, feed, search, vote, submolts, follow, agents, switch, auto, auto-daemon, writeup, history. Use 'history' to review past activity. Pass only the subcommand, not the tool name.", "'history' or 'persona set MyName' or 'auto' or 'feed hot 10' or 'post general | title | content'")
 Tools._reg("gcal",               google_calendar,         "Google Calendar integration. Sub-commands: setup, calendars, events, event, create, update, delete, search. Use 'gcal help' for full reference.", "'gcal events' or 'gcal create primary | Meeting | 2026-07-29T14:00:00 | 2026-07-29T15:00:00'")
 Tools._reg("gsheet",             google_sheets,          "Google Sheets + Excel + data analytics. Sub-commands: list, read, create, write, append (Google Sheets); open, new, edit, addrow (local .xlsx); stats, analyze, plot (analytics). Use 'gsheet help' for full reference.", "'gsheet list' or 'gsheet stats data.xlsx' or 'gsheet open budget.xlsx'")
 Tools._reg("radio",              radio_main,             "HAM radio / SDR: search radio stations (Radio-Browser), discover KiwiSDR nodes (open/stream/status), tune RTL-SDR (scan/list/tune). All sub-commands: browser, kiwi, rtlsdr. Use 'radio help' for full reference.", "'radio browser top 10' or 'radio kiwi list' or 'radio kiwi open <host>' or 'radio rtlsdr scan' or 'radio help'")
@@ -4440,6 +4463,11 @@ class GridOrchestrator:
              "Distill what you learn into L1/L2 memory for faster navigation and strategy next session.\n\n"
              "=== BEHAVIOR RULES ===\n\n"
             "SEARCH: Use web_search for general topics/news. Use file_search only for local file lookups.\n\n"
+            "MEMORY: When the user asks you to remember a durable fact, call memory_add with the fact. "
+            "Never claim you saved something without calling it.\n\n"
+            "SOCIAL: Use the social tool with input 'history' for Moltbook activity. "
+            "Do not use web_search for social history, and do not claim you cannot post on Moltbook — "
+            "the social tool handles posting and logging.\n\n"
             "DATA: Present data as plain text only (no markdown). Use the `table` tool for structured data "
             "(format: | h1 | h2 | / | v1 | v2 |). "
             "Use data_analyze or run_code for analysis.\n\n"
@@ -4567,6 +4595,29 @@ class GridOrchestrator:
                 kept.append(line)
         return "\n".join(kept).strip()
 
+    @staticmethod
+    def _explicit_remember(user_input: str) -> Optional[str]:
+        """Extract a fact from 'remember ...' or '... remember this' phrasing."""
+        text = (user_input or "").strip()
+        match = re.match(
+            r"^\s*remember(?:\s+that)?\s+(.+)$",
+            text,
+            re.IGNORECASE | re.DOTALL,
+        )
+        if match:
+            fact = re.sub(
+                r"^(?:this|that)\s*[:\-]\s*", "", match.group(1).strip(), flags=re.I
+            )
+            return fact.strip()
+        match = re.match(
+            r"^(.+?)[,.;]?\s*(?:please\s+)?remember\s+(?:this|that)\s*[.!]?$",
+            text,
+            re.IGNORECASE | re.DOTALL,
+        )
+        if match:
+            return match.group(1).strip()
+        return None
+
     def _synthesize_tool_result(self, user_input: str, tool_name: str, result: str) -> str:
         if tool_name in self.NO_SYNTHESIS:
             return ""
@@ -4623,6 +4674,16 @@ class GridOrchestrator:
                 flags=re.I,
             )
             return re.sub(r"[?.!]+$", "", rest).strip()
+        if name == "social":
+            rest = re.sub(
+                r"^(?:(?:my|the|full)\s+)*(?:social|moltbook)\s+",
+                "",
+                rest,
+                flags=re.I,
+            )
+            rest = re.sub(r"^(?:my|the|full)\s+", "", rest, flags=re.I)
+            if re.fullmatch(r"(?:history|activity|log)", rest, flags=re.I):
+                return "history"
         if name in {"satellite", "radio", "micro", "comms", "game", "ctf"}:
             if re.fullmatch(
                 r"(?:tools?|commands?|help|capabilities|options|usage)\s*\??",
@@ -4650,6 +4711,33 @@ class GridOrchestrator:
     def _auto_detect_tool(self, user_input: str, llm_response: str) -> Optional[Tuple[str, str]]:
         orig = user_input.strip()
         inp = orig.lower()
+
+        # Social history is ambiguous with the academic term "social history";
+        # only route when the user references their/GRID's activity or asks an
+        # action verb about it.
+        if (
+            re.search(
+                r"\b(?:show|check|review|see|display|get|read|list|search|find)\b"
+                r"[^?]*\b(?:social|moltbook)\s+(?:history|activity|log)\b",
+                inp,
+            )
+            or re.search(
+                r"\b(?:my|your|our|grid'?s?)\s+(?:social|moltbook)\s+"
+                r"(?:history|activity|log)\b",
+                inp,
+            )
+            or re.search(
+                r"\bhistory\s+of\s+(?:my\s+)?(?:social|moltbook)\s+"
+                r"(?:activities|activity)\b",
+                inp,
+            )
+            or re.search(
+                r"\b(?:what|show)\s+(?:did|have)\s+(?:i|you|grid)\s+"
+                r"(?:post|posted|do|done)\s+(?:on\s+)?(?:moltbook|social)\b",
+                inp,
+            )
+        ):
+            return ("social", "history")
 
         # Capability questions ("what radio tools do you have?") should be
         # answered by the model from the tool list, not routed to one tool
@@ -4838,6 +4926,11 @@ class GridOrchestrator:
             (r"(?:summarize|summarise|digest|summary|what('s| is)?\s+happening)\s*(?:on\s+)?(?:moltbook|social)?\s*$", "social", "summary"),
             (r"(?:analyze|analyse|analyze report|give\s+me\s+stats|report)\s*(?:on\s+)?(?:moltbook|social|the\s+feed|engagement|my\s+activity)?\s*$", "social", "analyze"),
             (r"(?:trend|progress|timeline|how\s+have\s+things\s+changed|progressed)\s*(?:over\s+time)?\s*(?:this\s+)?(day|week|month|year)?\s*(?:on\s+)?(?:moltbook|social)?\s*$", "social", lambda m: f"trend {m.group(1) or 'all'}"),
+            (r"(?:show|check|review|see|display|get|read|list)\s+(?:me\s+)?(?:your\s+|my\s+|the\s+|full\s+)*(?:social|moltbook)\s+(?:history|activity|log)", "social", "history"),
+            (r"(?:review|show|see|check|get)\s+(?:the\s+)?(?:full\s+)?(?:history|log)\s+of\s+(?:my\s+)?(?:social|moltbook)\s+(?:activities|activity)", "social", "history"),
+            (r"(?:social|moltbook)\s+(?:history|activity|log)", "social", "history"),
+            (r"(?:what|show)\s+(?:did|have)\s+(?:i|you|grid)\s+(?:post|posted|do|done)\s+(?:on\s+)?(?:moltbook|social)", "social", "history"),
+            (r"(?:search|find)\s+(?:on\s+)?(?:moltbook\s+|social\s+)?(?:history|activity|log)", "social", "history"),
             (r"(?:join|subscribe)\s+(?:to\s+)?(?:submolt\s+|community\s+)?(\S+)", "social", lambda m: f"subscribe {m.group(1)}"),
             (r"(?:follow)\s+(?:agent\s+)?(\S+)", "social", lambda m: f"follow {m.group(1)}"),
             (r"(?:search|find)\s+(?:on\s+)?(?:moltbook\s+)?(?:for\s+)?(.+)", "social", lambda m: f"search {m.group(1)}"),
@@ -4890,11 +4983,9 @@ class GridOrchestrator:
         messages = self._build_messages(user_input)
 
         if getattr(Tools, "recaller", None):
-            remembered = re.match(
-                r"^\s*remember(?:\s+that)?\s+(.+)$", user_input, re.IGNORECASE
-            )
+            remembered = self._explicit_remember(user_input)
             if remembered:
-                return Tools.recaller.remember(remembered.group(1).strip())
+                return Tools.recaller.remember(remembered)
             forgotten = re.match(
                 r"^\s*forget(?:\s+that)?\s+(.+)$", user_input, re.IGNORECASE
             )

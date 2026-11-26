@@ -2157,7 +2157,11 @@ def _social_summary() -> str:
 
 def moltbook_social(input_str: str) -> str:
     c = get_client()
-    parts = input_str.strip().split(maxsplit=1)
+    text = str(input_str or "").strip()
+    text = re.sub(r"^(?:social|moltbook)\s+", "", text, flags=re.IGNORECASE)
+    if re.fullmatch(r"(?:my\s+|the\s+|full\s+)*(?:history|activity|log)", text, re.IGNORECASE):
+        text = "history"
+    parts = text.split(maxsplit=1)
     cmd = parts[0].lower() if parts else "help"
     args = parts[1] if len(parts) > 1 else ""
 
