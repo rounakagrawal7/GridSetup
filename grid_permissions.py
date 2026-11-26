@@ -6,6 +6,7 @@ unchanged unless a policy is installed by the awake runner.
 
 from __future__ import annotations
 
+import re
 from typing import Any, Callable, Dict, Optional, Set, Tuple
 
 
@@ -77,6 +78,29 @@ def classify_tool(tool_name: str) -> str:
     return "confirm"
 
 
+SOCIAL_READ_COMMANDS = {
+    "help", "history", "summary", "digest", "status_report", "whats_up",
+    "analyze", "analysis", "report", "stats", "trend", "progress",
+    "timeline", "timeseries", "feed", "posts", "post", "comments",
+    "search", "profile", "submolts", "agents", "persona", "status",
+}
+
+
+def social_is_read_only(tool_input: str) -> bool:
+    """Social reads (history/feed/search/post lookup) should not need approval."""
+    text = re.sub(
+        r"^(?:social|moltbook)\s+", "", str(tool_input or "").strip(), flags=re.I
+    )
+    command, _, args = text.partition(" ")
+    command = command.lower()
+    if command == "persona":
+        sub = args.strip().lower()
+        return not (sub == "clear" or sub.startswith("set "))
+    if command == "post":
+        return "|" not in args
+    return command in SOCIAL_READ_COMMANDS
+
+
 class PermissionPolicy:
     """Ask/auto/read-only policy with per-session approvals.
 
@@ -121,6 +145,8 @@ class PermissionPolicy:
             return True, "auto-approved"
 
         risk = classify_tool(name)
+        if name == "social" and social_is_read_only(tool_input):
+            risk = "read"
         if risk == "read":
             return True, "read-only"
         if self.mode == "read_only":

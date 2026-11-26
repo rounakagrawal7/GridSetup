@@ -60,6 +60,18 @@ class PermissionPolicyTests(unittest.TestCase):
         self.assertFalse(allowed)
         self.assertIn("read-only mode", reason)
 
+    def test_social_reads_do_not_require_approval(self):
+        ask = PermissionPolicy({"mode": "ask"})
+        self.assertTrue(ask.allow("social", "social history")[0])
+        self.assertTrue(ask.allow("social", "feed hot 10")[0])
+        self.assertTrue(ask.allow("social", "post 1234")[0])
+        self.assertFalse(ask.allow("social", "post general | title | content")[0])
+        self.assertFalse(ask.allow("social", "persona set Tina")[0])
+
+        readonly = PermissionPolicy({"mode": "read_only"})
+        self.assertTrue(readonly.allow("social", "history")[0])
+        self.assertFalse(readonly.allow("social", "auto")[0])
+
     def test_deny_and_auto_approve(self):
         denied = PermissionPolicy({"deny": ["email_send"]})
         self.assertFalse(denied.allow("email_send")[0])

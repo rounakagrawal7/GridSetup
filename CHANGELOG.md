@@ -31,6 +31,9 @@
   tool calls with the argument on the `TOOL_CALL:` line parse correctly. Prompt
   rules stop false "I can't post on Moltbook" and unbacked "I noted that"
   claims.
+- Social reads (`history`, `feed`, `search`, post lookup, persona view) are
+  now read-only in the permission policy and no longer prompt for approval;
+  posting, voting, follows and persona changes still require it.
 - New `--api` host: a loopback AG-UI 1.0 endpoint over HTTP+SSE with bearer
   auth, thread storage, live tool/activity events, approval requests and REA
   report endpoints. The API resolves the live `__main__` tools so events and
