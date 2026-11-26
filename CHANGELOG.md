@@ -32,6 +32,10 @@
 - Social reply cycles skip comments whose parent no longer exists (Moltbook
   404) and keep them claimed, so deleted comments no longer generate repeated
   `reply_error` entries every cycle.
+- Plain-text output: model replies are stripped of Markdown bold/heading/
+  backtick markers and `*` bullets are normalized to `- `, so the terminal,
+  desktop and Android clients no longer show `**Projects & Setup:**` or
+  `*   item` artifacts.
 - Social routing fixes: "social history" now goes to the `social` tool before
   web search, inputs work with or without the `social`/`moltbook` prefix, and
   tool calls with the argument on the `TOOL_CALL:` line parse correctly. Prompt

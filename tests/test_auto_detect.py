@@ -1,6 +1,6 @@
 import unittest
 
-from grid_agent import GridOrchestrator, Tools
+from grid_agent import GridOrchestrator, Tools, strip_markdown
 
 
 class FakeBackend:
@@ -77,6 +77,23 @@ class AutoDetectTests(unittest.TestCase):
             Tools.parse_tool_call("TOOL_CALL: social\nINPUT: social history"),
             ("social", "social history"),
         )
+
+    def test_strip_markdown_for_plain_clients(self):
+        clean = strip_markdown(
+            "**Projects & Setup:**\n"
+            "*   Item one\n"
+            "*   Item two\n"
+            "### Heading\n"
+            "`code`"
+        )
+        self.assertNotIn("**", clean)
+        self.assertNotIn("*   ", clean)
+        self.assertNotIn("###", clean)
+        self.assertNotIn("`", clean)
+        self.assertIn("Projects & Setup:", clean)
+        self.assertIn("- Item one", clean)
+        self.assertIn("Heading", clean)
+        self.assertIn("code", clean)
 
     def test_synthesis_intent(self):
         self.assertTrue(

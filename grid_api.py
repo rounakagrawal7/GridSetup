@@ -1336,6 +1336,9 @@ class GridAPIServer:
             if not isinstance(assistant_text, str):
                 assistant_text = str(assistant_text)
             display_text = assistant_text
+            cleaner = getattr(self.runtime, "strip_markdown", None)
+            if callable(cleaner):
+                display_text = cleaner(display_text)
             if tool_results:
                 cleaned = re.sub(
                     r"^\[Tool:\s*[^\]]+\]\s*\n?", "", assistant_text

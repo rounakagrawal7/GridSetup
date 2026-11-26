@@ -156,6 +156,22 @@ def save_config(cfg: dict):
         console.print(f"[dim red]Config save failed: {e}[/dim red]")
 
 
+def strip_markdown(text: str) -> str:
+    """Remove Markdown markers that read as noise in the plain-text clients."""
+    if not text:
+        return text
+    clean = text
+    clean = re.sub(r"```[A-Za-z0-9_+.-]*\n?", "", clean)
+    clean = re.sub(r"\*\*(.+?)\*\*", r"\1", clean, flags=re.S)
+    clean = re.sub(r"__(.+?)__", r"\1", clean, flags=re.S)
+    clean = re.sub(r"`([^`\n]+)`", r"\1", clean)
+    clean = re.sub(r"^\s{0,3}#{1,6}\s*", "", clean, flags=re.M)
+    clean = re.sub(r"^\s{0,3}>\s?", "", clean, flags=re.M)
+    clean = re.sub(r"^(\s*)[*+]\s+", r"\1- ", clean, flags=re.M)
+    clean = re.sub(r"\[([^\]]+)\]\((https?://[^)]+)\)", r"\1 (\2)", clean)
+    return clean
+
+
 # ═══════════════════════════════════════════════════════════════
 # 0.5 Runtime pip installer
 # ═══════════════════════════════════════════════════════════════
@@ -4521,7 +4537,9 @@ class GridOrchestrator:
             "SOCIAL: Use the social tool with input 'history' for Moltbook activity. "
             "Do not use web_search for social history, and do not claim you cannot post on Moltbook — "
             "the social tool handles posting and logging.\n\n"
-            "DATA: Present data as plain text only (no markdown). Use the `table` tool for structured data "
+            "DATA: Present data as plain text only. Never use Markdown: no **bold**, "
+            "no * bullets, no # headings, no backticks. Use '- ' for bullets. "
+            "Use the `table` tool for structured data "
             "(format: | h1 | h2 | / | v1 | v2 |). "
             "Use data_analyze or run_code for analysis.\n\n"
             "NEWS: For news, use web_search broadly then web_fetch 2-3 articles from DIFFERENT sources "
@@ -4633,7 +4651,7 @@ class GridOrchestrator:
     @staticmethod
     def _capture_remembers(text: str) -> str:
         """Persist REMEMBER: lines the model adds and hide them from the reply."""
-        text = GridOrchestrator._strip_fake_tool_header(text)
+        text = strip_markdown(GridOrchestrator._strip_fake_tool_header(text))
         if not getattr(Tools, "recaller", None):
             return text
         kept = []
