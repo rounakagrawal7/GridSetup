@@ -228,6 +228,10 @@ Landed:
   desktop sidebar lists persisted threads and reloads their messages and tool
   cards. Clicking history during a run stops the run first; the composer also
   has a Stop button. `POST /api/v1/threads/clear` clears saved threads only.
+- Server-driven UI: `grid_ui.py` defines a locked catalog and macros; the API
+  emits `CUSTOM grid.ui` for tool results and REA findings; Compose renders the
+  tree natively with text fallback. `/api/v1/ui/catalog` and `/ui/action`
+  expose the catalog and action channel.
 
 Still open:
 

@@ -357,6 +357,13 @@ class APITestCase(unittest.TestCase):
         types = [event["type"] for event in events]
         self.assertIn("TOOL_CALL_RESULT", types)
         self.assertNotIn("TEXT_MESSAGE_CONTENT", types)
+        ui_events = [
+            event
+            for event in events
+            if event.get("type") == "CUSTOM" and event.get("name") == "grid.ui"
+        ]
+        self.assertTrue(ui_events)
+        self.assertEqual(ui_events[0]["value"]["root"]["type"], "card")
         detail = requests.get(
             f"{self.base}/threads/thr_tool", headers=self.headers
         ).json()
@@ -365,6 +372,23 @@ class APITestCase(unittest.TestCase):
         self.assertEqual(messages[1]["name"], "fake_echo")
         self.assertEqual(messages[1]["args"], "x")
         self.assertEqual(messages[1]["content"], "tool-output")
+        self.assertEqual(messages[1]["ui"]["type"], "card")
+
+    def test_ui_catalog_and_action(self):
+        catalog = requests.get(
+            f"{self.base}/ui/catalog", headers=self.headers
+        ).json()
+        self.assertTrue(catalog["ok"])
+        self.assertIn("card", catalog["catalog"])
+        self.assertIn("table", catalog["catalog"])
+        response = requests.post(
+            f"{self.base}/ui/action",
+            json={"surfaceId": "tool:test", "action": "noop", "payload": {}},
+            headers=self.headers,
+            timeout=5,
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json()["ok"])
 
     def test_rejects_missing_user_message(self):
         response = requests.post(
@@ -476,7 +500,18 @@ class ToolEventTests(unittest.TestCase):
             ],
         )
         call_id = self.events[0]["toolCallId"]
-        self.assertTrue(all(event.get("toolCallId") == call_id for event in self.events))
+        tool_events = [
+            event for event in self.events if event["type"].startswith("TOOL_CALL")
+        ]
+        self.assertTrue(
+            all(event.get("toolCallId") == call_id for event in tool_events)
+        )
+        self.assertTrue(
+            any(
+                event.get("type") == "CUSTOM" and event.get("name") == "grid.ui"
+                for event in self.events
+            )
+        )
         self.assertEqual(self.events[0]["toolCallName"], "fake_echo")
         self.assertEqual(self.events[3]["content"], "echo: hello")
 
@@ -488,8 +523,11 @@ class ToolEventTests(unittest.TestCase):
         grid_agent.set_event_sink(self.events.append)
         Tools.execute("rea", "authorized https://example.com")
         artifacts = [
-            event for event in self.events if event.get("type") == "CUSTOM"
+            event
+            for event in self.events
+            if event.get("type") == "CUSTOM" and event.get("name") == "grid.artifact"
         ]
+        self.assertEqual(len(artifacts), 1)
         self.assertEqual(artifacts[0]["name"], "grid.artifact")
         self.assertEqual(
             artifacts[0]["value"]["path"], "refs/rea/example/report.md"

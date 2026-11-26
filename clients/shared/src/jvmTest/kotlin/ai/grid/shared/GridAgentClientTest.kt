@@ -22,6 +22,7 @@ class GridAgentClientTest {
             """{"type":"TEXT_MESSAGE_CONTENT","messageId":"msg-1","delta":"hello"}""",
             """{"type":"TEXT_MESSAGE_END","messageId":"msg-1"}""",
             """{"type":"CUSTOM","name":"grid.artifact","value":{"path":"refs/rea/x/report.md","kind":"rea_report"}}""",
+            """{"type":"CUSTOM","name":"grid.ui","value":{"surfaceId":"tool:call-1","toolCallId":"call-1","fallback":"Pinging 127.0.0.1","root":{"type":"card","title":"ping","children":[]}}}""",
             """{"type":"CUSTOM","name":"grid.stats","value":{"durationMs":1234,"inputTokens":100,"outputTokens":50,"totalTokens":150,"model":"test-model","toolCalls":1,"estimated":false}}""",
             """{"type":"STEP_FINISHED","stepName":"agent"}""",
             """{"type":"RUN_FINISHED","threadId":"thr-1","runId":"run-1","outcome":{"type":"success"}}""",
@@ -52,6 +53,10 @@ class GridAgentClientTest {
             assertEquals("hello", delta.delta)
             val artifact = events.filterIsInstance<GridEvent.Artifact>().single()
             assertEquals("refs/rea/x/report.md", artifact.path)
+            val ui = events.filterIsInstance<GridEvent.Ui>().single()
+            assertEquals("tool:call-1", ui.surfaceId)
+            assertEquals("call-1", ui.toolCallId)
+            assertTrue(ui.root.contains("\"card\""))
             val stats = events.filterIsInstance<GridEvent.Stats>().single()
             assertEquals(150, stats.totalTokens)
             assertEquals(1234L, stats.durationMs)

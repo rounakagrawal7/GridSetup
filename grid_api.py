@@ -1086,6 +1086,13 @@ class GridAPIServer:
                 tool_results.append(content)
                 if call_id in tool_calls:
                     tool_calls[call_id]["content"] = content
+            elif kind == "CUSTOM" and event.get("name") == "grid.ui":
+                value = event.get("value")
+                if isinstance(value, dict):
+                    surface_call = str(value.get("toolCallId") or "")
+                    if surface_call in tool_calls:
+                        tool_calls[surface_call]["ui"] = value.get("root")
+                        tool_calls[surface_call]["surfaceId"] = value.get("surfaceId") or ""
             stream.send(event)
 
         try:
@@ -1268,6 +1275,14 @@ class GridAPIServer:
                     server._json(self, 200, server._model_info())
                 elif path == "/api/v1/provider":
                     server._json(self, 200, server._provider_info())
+                elif path == "/api/v1/ui/catalog":
+                    from grid_ui import catalog
+
+                    server._json(
+                        self,
+                        200,
+                        {"ok": True, "catalog": catalog()},
+                    )
                 elif path == "/api/v1/tools":
                     server._json(self, 200, server._tools_info())
                 elif path == "/api/v1/threads":
@@ -1339,6 +1354,16 @@ class GridAPIServer:
                     return
                 if path == "/api/v1/threads/clear":
                     server._json(self, 200, server._clear_threads())
+                    return
+                if path == "/api/v1/ui/action":
+                    body = self._read_json()
+                    from grid_ui import handle_action
+
+                    result = handle_action(
+                        str(body.get("action") or ""),
+                        body.get("payload") if isinstance(body.get("payload"), dict) else {},
+                    )
+                    server._json(self, 200 if result.get("ok") else 400, result)
                     return
                 if path == "/api/v1/command":
                     body = self._read_json()

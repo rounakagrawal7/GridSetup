@@ -276,6 +276,7 @@ private fun ChatScreen(baseUrl: String, token: String, onSettings: () -> Unit) {
                 )
             )
             is GridEvent.Stats -> Unit
+            is GridEvent.Ui -> Unit
             is GridEvent.Custom -> Unit
             is GridEvent.RunFinished -> status = "Ready"
             is GridEvent.Error -> {

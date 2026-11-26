@@ -26,7 +26,7 @@
 - New `--api` host: a loopback AG-UI 1.0 endpoint over HTTP+SSE with bearer
   auth, thread storage, live tool/activity events, approval requests and REA
   report endpoints. The API resolves the live `__main__` tools so events and
-  request-scoped policies work in the real process (158 tests total).
+  request-scoped policies work in the real process (159 tests total).
 - First Kotlin Multiplatform client under `clients/`: a shared `GridAgentClient`
   over the AG-UI Kotlin SDK, a Compose Desktop shell with a live tool timeline,
   approval cards and REA artifact cards, and a JVM contract test that replays
@@ -46,6 +46,11 @@
   `/memory`, `/life`, `/plan`, `/ref`, `/jobs`, `/pb`, `/persona`, `/social`,
   `/comms`, `/ctf`, `/game`, `/gcal`, `/gsheet`, `/save` and `/export` work
   directly from the desktop composer and render their output in chat.
+- Server-driven UI MVP: locked catalog (`markdown`, `table`, `keyValue`, `card`,
+  `button`, `form`, `select`, `approval`, `artifact`, `chart`), native Compose
+  renderer, server-side macros, rich tool and REA findings surfaces, and
+  `POST /api/v1/ui/action`. Every surface has a plain-text fallback; Android
+  keeps its existing tool card.
 - Desktop run activity: while the model works, the chat shows an animated
   **Thinking…** row with elapsed time; tool-using runs replace it with a live
   summary of commands, edits, thoughts, reads and tools.

@@ -4079,6 +4079,28 @@ Comment Data:
                     "content": (result or "")[:16000],
                 }
             )
+            try:
+                from grid_ui import expand_macro
+
+                surface = expand_macro(
+                    "tool_result",
+                    {
+                        "call_id": call_id,
+                        "tool_name": tool_name,
+                        "tool_input": tool_input,
+                        "result": result if isinstance(result, str) else str(result or ""),
+                    },
+                )
+                if surface:
+                    emit_event(
+                        {
+                            "type": "CUSTOM",
+                            "name": "grid.ui",
+                            "value": surface,
+                        }
+                    )
+            except Exception:
+                pass
             if tool_name == "rea":
                 reported = re.search(r"^Report:\s*(.+)$", result or "", re.M)
                 if reported:

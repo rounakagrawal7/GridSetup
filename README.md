@@ -374,6 +374,8 @@ Endpoints:
 | `GET` | `/api/v1/provider` | active provider and supported providers |
 | `POST` | `/api/v1/provider` | switch provider, URL, key and model |
 | `POST` | `/api/v1/provider/models` | list models for a provider without switching |
+| `GET` | `/api/v1/ui/catalog` | locked server-driven UI component catalog |
+| `POST` | `/api/v1/ui/action` | submit a rendered form/button action |
 | `POST` | `/api/v1/command` | run a terminal-style local command (`/memory`, `/life`, `/plan`, `/jobs`, ...) |
 | `POST` | `/api/v1/shutdown` | save memory and stop the API host |
 | `GET` | `/api/v1/threads` | thread summaries |
@@ -412,6 +414,22 @@ cd clients
 ```
 
 On a machine with no running host, the desktop opens a **Start GRID** screen instead of failing: choose **Ollama**, **LM Studio**, **OpenRouter** or **OpenAI**, set the base URL, API key (when needed) and model, then click **Start GRID host**. The model field is a dropdown that loads the provider's available models (with a Refresh button and manual entry). It writes `config.json` and launches the local Python host itself. The provider can be changed later from **Change provider** in the left sidebar.
+
+#### Server-driven UI (A2UI subset)
+
+GRID emits a constrained `CUSTOM grid.ui` AG-UI event alongside tool results. The payload is a JSON component tree, never HTML or JavaScript. The locked catalog lives in `grid_ui.py`:
+
+```text
+markdown · table · keyValue · card · button · form · select
+approval · artifact · chart
+```
+
+- The desktop renders the tree with native Compose widgets; Android ignores it and keeps the plain-text tool card as fallback.
+- Every surface carries a `fallback` string, so clients without the renderer still show the full tool output.
+- `tool result` and `REA` surfaces are generated server-side. The REA surface parses the report manifest and writes a findings table plus an **Open report** artifact.
+- Macros (`@ui_macro`) expand server-side. Sensitive values are bound by the server and never included in model output.
+- Form/button actions post to `POST /api/v1/ui/action`; approvals reuse the existing approval endpoint.
+- The catalog is intentionally small and schema-validated; unknown component types fall back to text.
 
 The desktop finds the token at `../run/api_token`, `run/api_token`, or `GRID_API_TOKEN`; pass `--url` or `--token-file` to override. It renders user/assistant messages, live tool cards, REA report artifacts, and approval requests. Tool-only runs show a single tool card (no duplicated assistant bubble); each assistant reply carries its duration and token count, the sidebar has a session token meter, and the chat has a visible scrollbar. User messages, assistant replies, server-command notes and tool outputs each have a small copy icon that copies the full text. The **HISTORY** list in the sidebar shows persisted threads and reloads a conversation, including its tool cards, when clicked. **Clear** deletes saved threads only; `memory.md`, the user profile, persona, goals and config are not touched. Clicking a thread while a response is streaming stops that response first. While a run is active the chat shows a live **Thinking…** row with elapsed time, a **Stop** button appears next to the composer, then a compact process summary such as `+2 commands · 1 edit · 3 thoughts · 1 read · 1 tool`. The model is shown in the sidebar and can be switched from the **Change model** menu without restarting. Type `/` in the composer for the command palette (`/help`, `/new`, `/clear`, `/exit`, `/provider`, `/model`, `/tokens`, `/rea`, `/tools`, `/tool`, every registered GRID tool, and terminal-style commands), with arrow-key selection and Tab completion; the cursor lands at the end of the completed command. Local commands such as `/memory`, `/life`, `/plan`, `/ref`, `/jobs`, `/pb`, `/persona`, `/social`, `/comms`, `/ctf`, `/game`, `/gcal`, `/gsheet`, `/save` and `/export` run against the host through `POST /api/v1/command` and render their output in chat. `/exit` saves host conversation memory (and syncs PocketBase when connected) before closing the desktop. `/shutdown` asks for confirmation, then saves and stops the API host, autopilot and Android connectivity before closing the desktop.
 
@@ -516,6 +534,7 @@ The `email` section must already have working SMTP settings. With `mode: "auto"`
 | `grid_awake.py` | Autopilot, step display and double-Esc cancel |
 | `grid_resident.py` | Always-on resident, loopback control surface and app handoff |
 | `grid_api.py` | Local AG-UI HTTP/SSE API for desktop and Android clients |
+| `grid_ui.py` | Locked server-driven UI catalog, macros and native Compose surfaces |
 | `clients/` | Kotlin Multiplatform client + Compose Desktop shell |
 | `tools/` | Optional profile backfill, pilot harness and boot-window logger |
 | `grid_permissions.py` | Ask/auto/read-only policy for autonomous tool use |

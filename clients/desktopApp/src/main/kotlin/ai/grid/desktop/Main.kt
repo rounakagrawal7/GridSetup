@@ -9,6 +9,7 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.VerticalScrollbar
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -44,6 +45,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.darkColorScheme
@@ -104,6 +106,7 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.doubleOrNull
 import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
@@ -193,8 +196,16 @@ private sealed interface Item {
         val name: String,
         val args: String,
         val result: String?,
+        val ui: String? = null,
+        val surfaceId: String = "",
     ) : Item
     data class Artifact(val path: String) : Item
+    data class Ui(
+        val surfaceId: String,
+        val root: String,
+        val artifactPath: String = "",
+        val fallback: String = "",
+    ) : Item
     data class Activity(
         val commands: Int = 0,
         val edits: Int = 0,
@@ -434,7 +445,12 @@ private fun App(
                 }
             }
             is GridEvent.Activity -> status = event.activityType
-            is GridEvent.Artifact -> addDuringRun(Item.Artifact(event.path))
+            is GridEvent.Artifact -> {
+                val richRea = items.any {
+                    it is Item.Tool && it.name == "rea" && it.ui != null
+                }
+                if (!richRea) addDuringRun(Item.Artifact(event.path))
+            }
             is GridEvent.ApprovalRequired -> addDuringRun(
                 Item.Approval(
                     id = event.approvalId,
@@ -457,6 +473,46 @@ private fun App(
                         tokens = event.totalTokens,
                         estimated = event.estimated,
                     )
+                }
+            }
+            is GridEvent.Ui -> {
+                if (event.root.isNotBlank()) {
+                    if (event.toolCallId.isNotBlank()) {
+                        val index = items.indexOfLast {
+                            it is Item.Tool && it.callId == event.toolCallId
+                        }
+                        if (index >= 0) {
+                            val old = items[index] as Item.Tool
+                            items[index] = old.copy(
+                                ui = event.root,
+                                surfaceId = event.surfaceId,
+                            )
+                        } else {
+                            addDuringRun(
+                                Item.Ui(
+                                    surfaceId = event.surfaceId,
+                                    root = event.root,
+                                    artifactPath = event.artifactPath,
+                                    fallback = event.fallback,
+                                )
+                            )
+                        }
+                    } else {
+                        if (event.artifactPath.isNotBlank()) {
+                            val artifactIndex = items.indexOfLast {
+                                it is Item.Artifact && it.path == event.artifactPath
+                            }
+                            if (artifactIndex >= 0) items.removeAt(artifactIndex)
+                        }
+                        addDuringRun(
+                            Item.Ui(
+                                surfaceId = event.surfaceId,
+                                root = event.root,
+                                artifactPath = event.artifactPath,
+                                fallback = event.fallback,
+                            )
+                        )
+                    }
                 }
             }
             is GridEvent.Custom -> Unit
@@ -881,6 +937,8 @@ private fun App(
                                 name = message.name,
                                 args = message.args,
                                 result = message.content.ifBlank { "(no output)" },
+                                ui = message.ui.ifBlank { null },
+                                surfaceId = message.surfaceId,
                             )
                         )
                     }
@@ -929,6 +987,40 @@ private fun App(
             } finally {
                 commandBusy = false
             }
+        }
+    }
+
+    fun sendUiAction(surfaceId: String, action: String, payload: String) {
+        scope.launch {
+            try {
+                val message = withContext(Dispatchers.IO) {
+                    postUiAction(baseUrl, token, surfaceId, action, payload)
+                }
+                items.add(Item.Note(message))
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                items.add(
+                    Item.Error(
+                        "UI action failed: ${connectionAwareMessage(error, baseUrl)}"
+                    )
+                )
+            }
+        }
+    }
+
+    fun resolveUiApproval(approvalId: String, decision: String) {
+        scope.launch {
+            val ok = withContext(Dispatchers.IO) {
+                postApproval(baseUrl, token, approvalId, decision)
+            }
+            items.add(
+                if (ok) {
+                    Item.Note("Approval sent: $decision")
+                } else {
+                    Item.Error("Approval request failed.")
+                }
+            )
         }
     }
 
@@ -1027,8 +1119,31 @@ private fun App(
                         when (item) {
                             is Item.User -> UserBubble(item.text)
                             is Item.Assistant -> AssistantBubble(item)
-                            is Item.Tool -> ToolCard(item)
+                            is Item.Tool -> ToolCard(
+                                item = item,
+                                onAction = { action, payload ->
+                                    sendUiAction(
+                                        item.surfaceId.ifBlank { "tool:${item.callId}" },
+                                        action,
+                                        payload,
+                                    )
+                                },
+                                onApproval = { id, decision ->
+                                    resolveUiApproval(id, decision)
+                                },
+                                onOpenArtifact = { openPath(it) },
+                            )
                             is Item.Artifact -> ArtifactCard(item.path)
+                            is Item.Ui -> UiSurfaceCard(
+                                item = item,
+                                onAction = { action, payload ->
+                                    sendUiAction(item.surfaceId, action, payload)
+                                },
+                                onApproval = { id, decision ->
+                                    resolveUiApproval(id, decision)
+                                },
+                                onOpenArtifact = { openPath(it) },
+                            )
                             is Item.Activity -> ActivityCard(item)
                             is Item.Approval -> ApprovalCard(
                                 approval = item,
@@ -1871,7 +1986,12 @@ private fun copyToClipboard(text: String) {
 }
 
 @Composable
-private fun ToolCard(item: Item.Tool) {
+private fun ToolCard(
+    item: Item.Tool,
+    onAction: (String, String) -> Unit,
+    onApproval: (String, String) -> Unit,
+    onOpenArtifact: (String) -> Unit,
+) {
     Card(
         colors = CardDefaults.cardColors(containerColor = Color(0xFF0F1A13)),
         modifier = Modifier.fillMaxWidth(),
@@ -1892,20 +2012,545 @@ private fun ToolCard(item: Item.Tool) {
                     CopyButton(item.result)
                 }
             }
-            if (item.args.isNotBlank()) {
-                Spacer(Modifier.height(7.dp))
-                Text(item.args, color = Muted, fontSize = 11.sp, fontFamily = FontFamily.Monospace)
-            }
-            item.result?.let { result ->
-                Spacer(Modifier.height(9.dp))
-                HorizontalDivider(color = PanelRaised)
+            if (!item.ui.isNullOrBlank()) {
                 Spacer(Modifier.height(8.dp))
-                SelectionContainer {
+                GridUiRenderer(
+                    surfaceId = item.surfaceId.ifBlank { "tool:${item.callId}" },
+                    root = item.ui,
+                    fallback = item.result.orEmpty(),
+                    onAction = onAction,
+                    onApproval = onApproval,
+                    onOpenArtifact = onOpenArtifact,
+                )
+            } else {
+                if (item.args.isNotBlank()) {
+                    Spacer(Modifier.height(7.dp))
+                    Text(item.args, color = Muted, fontSize = 11.sp, fontFamily = FontFamily.Monospace)
+                }
+                item.result?.let { result ->
+                    Spacer(Modifier.height(9.dp))
+                    HorizontalDivider(color = PanelRaised)
+                    Spacer(Modifier.height(8.dp))
+                    SelectionContainer {
+                        Text(
+                            result.take(1600),
+                            color = GridGreenDim,
+                            fontSize = 11.sp,
+                            fontFamily = FontFamily.Monospace,
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun UiSurfaceCard(
+    item: Item.Ui,
+    onAction: (String, String) -> Unit,
+    onApproval: (String, String) -> Unit,
+    onOpenArtifact: (String) -> Unit,
+) {
+    GridUiRenderer(
+        surfaceId = item.surfaceId,
+        root = item.root,
+        fallback = item.fallback,
+        onAction = onAction,
+        onApproval = onApproval,
+        onOpenArtifact = onOpenArtifact,
+    )
+}
+
+@Composable
+private fun GridUiRenderer(
+    surfaceId: String,
+    root: String,
+    fallback: String,
+    onAction: (String, String) -> Unit,
+    onApproval: (String, String) -> Unit,
+    onOpenArtifact: (String) -> Unit,
+) {
+    val node = remember(root) {
+        runCatching { Json.parseToJsonElement(root).jsonObject }.getOrNull()
+    }
+    if (node == null) {
+        UiFallback(fallback)
+    } else {
+        GridUiNode(
+            node = node,
+            surfaceId = surfaceId,
+            fallback = fallback,
+            onAction = onAction,
+            onApproval = onApproval,
+            onOpenArtifact = onOpenArtifact,
+        )
+    }
+}
+
+@Composable
+private fun UiFallback(text: String) {
+    SelectionContainer {
+        Text(
+            text.ifBlank { "Unsupported UI surface." },
+            color = GridGreenDim,
+            fontSize = 11.sp,
+            fontFamily = FontFamily.Monospace,
+        )
+    }
+}
+
+private fun JsonObject.uiString(key: String): String =
+    this[key]?.jsonPrimitive?.contentOrNull ?: ""
+
+private fun JsonObject.uiArray(key: String): List<JsonObject> =
+    (this[key] as? kotlinx.serialization.json.JsonArray)
+        ?.mapNotNull { it as? JsonObject }
+        ?: emptyList()
+
+private fun uiToneColor(tone: String): Color = when (tone) {
+    "success" -> Color(0xFF102A19)
+    "warning" -> Color(0xFF2A2410)
+    "danger" -> Color(0xFF2A1414)
+    else -> Color(0xFF101A13)
+}
+
+@Composable
+private fun GridUiNode(
+    node: JsonObject,
+    surfaceId: String,
+    fallback: String,
+    onAction: (String, String) -> Unit,
+    onApproval: (String, String) -> Unit,
+    onOpenArtifact: (String) -> Unit,
+) {
+    when (node.uiString("type")) {
+        "card" -> UiCard(node, surfaceId, fallback, onAction, onApproval, onOpenArtifact)
+        "markdown" -> UiMarkdown(node.uiString("text"))
+        "keyValue" -> UiKeyValue(node)
+        "table" -> UiTable(node)
+        "button" -> UiButton(node, onAction)
+        "form" -> UiForm(node, onAction)
+        "approval" -> UiApproval(node, onApproval)
+        "artifact" -> UiArtifact(node, onOpenArtifact)
+        "chart" -> UiChart(node)
+        else -> UiFallback(fallback)
+    }
+}
+
+@Composable
+private fun UiCard(
+    node: JsonObject,
+    surfaceId: String,
+    fallback: String,
+    onAction: (String, String) -> Unit,
+    onApproval: (String, String) -> Unit,
+    onOpenArtifact: (String) -> Unit,
+) {
+    val title = node.uiString("title")
+    val subtitle = node.uiString("subtitle")
+    val tone = node.uiString("tone")
+    Surface(
+        color = uiToneColor(tone),
+        shape = RoundedCornerShape(10.dp),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(Modifier.padding(12.dp)) {
+            if (title.isNotBlank()) {
+                Text(
+                    title,
+                    color = Color.White,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.SemiBold,
+                )
+            }
+            if (subtitle.isNotBlank()) {
+                Spacer(Modifier.height(2.dp))
+                Text(subtitle, color = Muted, fontSize = 10.sp)
+            }
+            val children = node.uiArray("children")
+            if (children.isNotEmpty()) {
+                Spacer(Modifier.height(8.dp))
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    children.forEach { child ->
+                        GridUiNode(
+                            node = child,
+                            surfaceId = surfaceId,
+                            fallback = fallback,
+                            onAction = onAction,
+                            onApproval = onApproval,
+                            onOpenArtifact = onOpenArtifact,
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun UiMarkdown(text: String) {
+    if (text.isBlank()) return
+    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        var inCode = false
+        text.lines().forEach { raw ->
+            val line = raw.trimEnd()
+            if (line.trimStart().startsWith("```")) {
+                inCode = !inCode
+                return@forEach
+            }
+            when {
+                inCode -> Text(
+                    line,
+                    color = GridGreenDim,
+                    fontSize = 11.sp,
+                    fontFamily = FontFamily.Monospace,
+                )
+                line.startsWith("### ") -> Text(
+                    line.removePrefix("### "),
+                    color = Color.White,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                line.startsWith("## ") || line.startsWith("# ") -> Text(
+                    line.removePrefix("## ").removePrefix("# "),
+                    color = Color.White,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                line.startsWith("- ") || line.startsWith("* ") -> Row {
+                    Text("• ", color = GridGreen, fontSize = 11.sp)
+                    SelectionContainer {
+                        Text(line.drop(2), color = GridGreenDim, fontSize = 11.sp)
+                    }
+                }
+                line.isBlank() -> Spacer(Modifier.height(3.dp))
+                else -> SelectionContainer {
+                    Text(line, color = GridGreenDim, fontSize = 11.sp, lineHeight = 17.sp)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun UiKeyValue(node: JsonObject) {
+    val items = node.uiArray("items")
+    if (items.isEmpty()) return
+    Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
+        items.forEach { item ->
+            val label = item.uiString("label")
+            val value = item.uiString("value")
+            Row(Modifier.fillMaxWidth()) {
+                Text(
+                    label,
+                    color = Muted,
+                    fontSize = 10.sp,
+                    modifier = Modifier.width(145.dp),
+                )
+                SelectionContainer(Modifier.weight(1f)) {
                     Text(
-                        result.take(1600),
+                        value.ifBlank { "—" },
                         color = GridGreenDim,
                         fontSize = 11.sp,
                         fontFamily = FontFamily.Monospace,
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun UiTable(node: JsonObject) {
+    val columns = (node["columns"] as? kotlinx.serialization.json.JsonArray)
+        ?.mapNotNull { it.jsonPrimitive.contentOrNull }
+        ?: emptyList()
+    val rows = (node["rows"] as? kotlinx.serialization.json.JsonArray)
+        ?.map { row ->
+            (row as? kotlinx.serialization.json.JsonArray)
+                ?.mapNotNull { it.jsonPrimitive.contentOrNull }
+                ?: emptyList()
+        }
+        ?: emptyList()
+    if (columns.isEmpty() && rows.isEmpty()) return
+    val scroll = rememberScrollState()
+    Column(Modifier.fillMaxWidth().horizontalScroll(scroll)) {
+        Row(
+            Modifier
+                .background(PanelRaised, RoundedCornerShape(4.dp))
+                .padding(horizontal = 6.dp, vertical = 5.dp)
+        ) {
+            columns.forEach { column ->
+                Text(
+                    column,
+                    color = GridGreen,
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.width(150.dp),
+                )
+            }
+        }
+        rows.forEach { row ->
+            Row(Modifier.padding(horizontal = 6.dp, vertical = 4.dp)) {
+                row.forEach { cell ->
+                    Text(
+                        cell,
+                        color = GridGreenDim,
+                        fontSize = 10.sp,
+                        fontFamily = FontFamily.Monospace,
+                        modifier = Modifier.width(150.dp),
+                    )
+                }
+            }
+            HorizontalDivider(color = PanelRaised)
+        }
+    }
+}
+
+@Composable
+private fun UiButton(node: JsonObject, onAction: (String, String) -> Unit) {
+    val label = node.uiString("label").ifBlank { "Action" }
+    val action = node.uiString("action").ifBlank { "noop" }
+    val payload = node["payload"]?.toString() ?: "{}"
+    val style = node.uiString("style")
+    val onClick = { onAction(action, payload) }
+    when (style) {
+        "primary" -> Button(
+            onClick = onClick,
+            colors = ButtonDefaults.buttonColors(containerColor = GridGreen, contentColor = Color.Black),
+        ) { Text(label, fontSize = 11.sp) }
+        "danger" -> OutlinedButton(onClick = onClick) {
+            Text(label, color = Danger, fontSize = 11.sp)
+        }
+        else -> OutlinedButton(onClick = onClick) {
+            Text(label, fontSize = 11.sp)
+        }
+    }
+}
+
+@Composable
+private fun UiForm(node: JsonObject, onAction: (String, String) -> Unit) {
+    val fields = node.uiArray("fields")
+    val initial = remember(node) {
+        buildMap {
+            fields.forEach { field ->
+                val name = field.uiString("name")
+                if (name.isNotBlank()) {
+                    val value = field.uiString("value")
+                    val options = (field["options"] as? kotlinx.serialization.json.JsonArray)
+                        ?.mapNotNull { it.jsonPrimitive.contentOrNull }
+                        ?: emptyList()
+                    put(name, value.ifBlank { options.firstOrNull() ?: "" })
+                }
+            }
+        }
+    }
+    var values by remember(node) { mutableStateOf(initial) }
+    var openSelect by remember(node) { mutableStateOf("") }
+    val title = node.uiString("title")
+    val action = node.uiString("action").ifBlank { "form.submit" }
+    val submitLabel = node.uiString("submitLabel").ifBlank { "Submit" }
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        if (title.isNotBlank()) {
+            Text(title, color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+        }
+        fields.forEach { field ->
+            val name = field.uiString("name")
+            val label = field.uiString("label").ifBlank { name }
+            val type = field.uiString("type")
+            val value = values[name].orEmpty()
+            when (type) {
+                "toggle" -> Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(label, color = GridGreenDim, fontSize = 11.sp, modifier = Modifier.weight(1f))
+                    Switch(
+                        checked = value == "true",
+                        onCheckedChange = { values = values + (name to if (it) "true" else "false") },
+                    )
+                }
+                "select" -> {
+                    val options = (field["options"] as? kotlinx.serialization.json.JsonArray)
+                        ?.mapNotNull { it.jsonPrimitive.contentOrNull }
+                        ?: emptyList()
+                    Box {
+                        OutlinedButton(
+                            onClick = { openSelect = name },
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Text(value.ifBlank { label }, fontSize = 11.sp)
+                            Spacer(Modifier.weight(1f))
+                            Text("▾", color = Muted, fontSize = 11.sp)
+                        }
+                        DropdownMenu(
+                            expanded = openSelect == name,
+                            onDismissRequest = { openSelect = "" },
+                        ) {
+                            options.forEach { option ->
+                                DropdownMenuItem(
+                                    text = { Text(option, fontSize = 11.sp) },
+                                    onClick = {
+                                        values = values + (name to option)
+                                        openSelect = ""
+                                    },
+                                )
+                            }
+                        }
+                    }
+                }
+                else -> OutlinedTextField(
+                    value = value,
+                    onValueChange = { values = values + (name to it) },
+                    label = { Text(label, fontSize = 11.sp) },
+                    singleLine = true,
+                    visualTransformation = if (type == "password") {
+                        PasswordVisualTransformation()
+                    } else {
+                        androidx.compose.ui.text.input.VisualTransformation.None
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+        }
+        Button(
+            onClick = {
+                val payload = buildJsonObject {
+                    values.forEach { (key, value) -> put(key, value) }
+                }.toString()
+                onAction(action, payload)
+            },
+            colors = ButtonDefaults.buttonColors(containerColor = GridGreen, contentColor = Color.Black),
+        ) {
+            Text(submitLabel, fontSize = 11.sp)
+        }
+    }
+}
+
+@Composable
+private fun UiApproval(node: JsonObject, onApproval: (String, String) -> Unit) {
+    var resolved by remember(node) { mutableStateOf("") }
+    val approvalId = node.uiString("approvalId")
+    val tool = node.uiString("tool")
+    val risk = node.uiString("risk")
+    val input = node.uiString("input")
+    Surface(
+        color = Color(0xFF231E10),
+        shape = RoundedCornerShape(10.dp),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(Modifier.padding(12.dp)) {
+            Text("APPROVAL REQUIRED", color = Warning, fontSize = 10.sp, letterSpacing = 1.5.sp)
+            Spacer(Modifier.height(5.dp))
+            Text(tool, color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+            Text("risk: $risk", color = Muted, fontSize = 10.sp)
+            if (input.isNotBlank()) {
+                Spacer(Modifier.height(6.dp))
+                SelectionContainer {
+                    Text(
+                        input.take(1200),
+                        color = GridGreenDim,
+                        fontSize = 10.sp,
+                        fontFamily = FontFamily.Monospace,
+                    )
+                }
+            }
+            Spacer(Modifier.height(9.dp))
+            if (resolved.isNotBlank()) {
+                Text("Answered: $resolved", color = GridGreenDim, fontSize = 11.sp)
+            } else {
+                Row {
+                    Button(
+                        onClick = {
+                            resolved = "approve"
+                            onApproval(approvalId, "approve")
+                        },
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = GridGreen,
+                            contentColor = Color.Black,
+                        ),
+                    ) { Text("Approve", fontSize = 11.sp) }
+                    Spacer(Modifier.width(8.dp))
+                    OutlinedButton(onClick = {
+                        resolved = "deny"
+                        onApproval(approvalId, "deny")
+                    }) { Text("Deny", fontSize = 11.sp) }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun UiArtifact(node: JsonObject, onOpenArtifact: (String) -> Unit) {
+    val path = node.uiString("path")
+    val label = node.uiString("label").ifBlank { "Open" }
+    val kind = node.uiString("kind")
+    Card(
+        colors = CardDefaults.cardColors(containerColor = Color(0xFF102016)),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text(
+                    kind.ifBlank { "ARTIFACT" }.uppercase(),
+                    color = GridGreen,
+                    fontSize = 9.sp,
+                    letterSpacing = 1.2.sp,
+                )
+                Spacer(Modifier.height(3.dp))
+                SelectionContainer {
+                    Text(
+                        path,
+                        color = GridGreenDim,
+                        fontSize = 10.sp,
+                        fontFamily = FontFamily.Monospace,
+                    )
+                }
+            }
+            Spacer(Modifier.width(8.dp))
+            OutlinedButton(onClick = { onOpenArtifact(path) }) {
+                Text(label, fontSize = 10.sp)
+            }
+        }
+    }
+}
+
+@Composable
+private fun UiChart(node: JsonObject) {
+    val labels = (node["labels"] as? kotlinx.serialization.json.JsonArray)
+        ?.mapNotNull { it.jsonPrimitive.contentOrNull }
+        ?: emptyList()
+    val values = (node["values"] as? kotlinx.serialization.json.JsonArray)
+        ?.mapNotNull { it.jsonPrimitive.doubleOrNull }
+        ?: emptyList()
+    if (values.isEmpty()) return
+    val max = values.maxOrNull()?.coerceAtLeast(1.0) ?: 1.0
+    val title = node.uiString("title")
+    Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
+        if (title.isNotBlank()) {
+            Text(title, color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+        }
+        Row(
+            modifier = Modifier.fillMaxWidth().height(96.dp),
+            verticalAlignment = Alignment.Bottom,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            values.forEachIndexed { index, value ->
+                Column(
+                    modifier = Modifier.weight(1f),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    Box(
+                        Modifier
+                            .fillMaxWidth(0.55f)
+                            .height((value / max * 72.0).toFloat().dp)
+                            .background(GridGreen, RoundedCornerShape(2.dp))
+                    )
+                    Spacer(Modifier.height(3.dp))
+                    Text(
+                        labels.getOrNull(index).orEmpty(),
+                        color = Muted,
+                        fontSize = 8.sp,
+                        maxLines = 1,
                     )
                 }
             }
@@ -2347,6 +2992,8 @@ private data class StoredMessage(
     val content: String,
     val name: String = "",
     val args: String = "",
+    val ui: String = "",
+    val surfaceId: String = "",
 )
 
 private data class ClearHistoryResult(
@@ -2497,6 +3144,8 @@ private fun fetchThreadMessages(
                         content = content,
                         name = item["name"]?.jsonPrimitive?.contentOrNull ?: "",
                         args = item["args"]?.jsonPrimitive?.contentOrNull ?: "",
+                        ui = item["ui"]?.toString()?.takeUnless { it == "null" } ?: "",
+                        surfaceId = item["surfaceId"]?.jsonPrimitive?.contentOrNull ?: "",
                     )
                 }
             }
@@ -2790,6 +3439,49 @@ private fun fetchModelInfo(baseUrl: String, token: String): ModelInfo? {
         }
     } catch (_: Exception) {
         null
+    }
+}
+
+private fun postUiAction(
+    baseUrl: String,
+    token: String,
+    surfaceId: String,
+    action: String,
+    payload: String,
+): String {
+    val connection = URI.create("$baseUrl/api/v1/ui/action")
+        .toURL().openConnection() as HttpURLConnection
+    connection.requestMethod = "POST"
+    connection.doOutput = true
+    connection.setRequestProperty("Authorization", "Bearer $token")
+    connection.setRequestProperty("Content-Type", "application/json")
+    connection.connectTimeout = 5000
+    connection.readTimeout = 15000
+    try {
+        val payloadElement = if (payload.isBlank()) {
+            JsonObject(emptyMap())
+        } else {
+            runCatching { Json.parseToJsonElement(payload) }
+                .getOrElse { JsonObject(emptyMap()) }
+        }
+        val body = buildJsonObject {
+            put("surfaceId", surfaceId)
+            put("action", action)
+            put("payload", payloadElement)
+        }.toString()
+        connection.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
+        val code = connection.responseCode
+        val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+        val text = stream?.bufferedReader()?.use { it.readText() }.orEmpty()
+        val root = Json.parseToJsonElement(text.ifBlank { "{}" }).jsonObject
+        if (code in 200..299) {
+            return root["message"]?.jsonPrimitive?.contentOrNull ?: "Action received."
+        }
+        throw IllegalStateException(
+            root["error"]?.jsonPrimitive?.contentOrNull ?: "Action failed (HTTP $code)"
+        )
+    } finally {
+        connection.disconnect()
     }
 }
 

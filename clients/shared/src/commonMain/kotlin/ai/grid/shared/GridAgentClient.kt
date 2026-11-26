@@ -117,6 +117,14 @@ private fun BaseEvent.toGridEvent(): GridEvent = when (this) {
             toolCalls = value.int("toolCalls"),
             estimated = value.boolean("estimated"),
         )
+        "grid.ui" -> GridEvent.Ui(
+            surfaceId = value.string("surfaceId"),
+            toolCallId = value.string("toolCallId"),
+            artifactPath = value.string("artifactPath"),
+            artifactKind = value.string("artifactKind"),
+            fallback = value.string("fallback"),
+            root = (value as? JsonObject)?.get("root")?.toString() ?: "",
+        )
         else -> GridEvent.Custom(name, value.toString())
     }
     is RunFinishedEvent -> GridEvent.RunFinished(threadId, runId)

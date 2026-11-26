@@ -38,6 +38,14 @@ sealed interface GridEvent {
         val toolCalls: Int,
         val estimated: Boolean,
     ) : GridEvent
+    data class Ui(
+        val surfaceId: String,
+        val toolCallId: String,
+        val artifactPath: String,
+        val artifactKind: String,
+        val fallback: String,
+        val root: String,
+    ) : GridEvent
     data class Custom(val name: String, val value: String) : GridEvent
     data class RunFinished(val threadId: String, val runId: String) : GridEvent
     data class Error(val message: String) : GridEvent
