@@ -118,33 +118,37 @@ PocketBase does **not** need the Python `pocketbase` package. `grid_pb.py` talks
 
 ---
 
-## 🥊 GRID vs Hermes vs OpenClaw — Why GRID Wins
+## 🥊 GRID vs Hermes vs OpenClaw — where each fits
 
-GRID isn't another messaging tool for one AI. It's the **only agent that fuses a full OSINT / field-ops stack directly to a human-like memory**. Hermes and OpenClaw give you a *chat brain* with toys bolted on — GRID ships as a **recon dashboard, a radio rig, a satellite dish, a camera lab, and a microcontroller bench**, from a terminal host plus native desktop and Android clients. And it does it with **local-first operation**, **81 built-in tools / 100+ sub-commands**, and an API your own clients can use.
+Last checked: **November 2026**. Hermes Agent is at [v0.23.4](https://github.com/NousResearch/hermes-agent/releases/tag/v0.23.4) (Nov 23) and OpenClaw at [v2026.11.10](https://github.com/openclaw/openclaw/releases/tag/v2026.11.10) (Nov 25). Both are broader than the old “coding vs messaging” split, so this table compares what each is actually built for.
 
-| Capability | **GRID (v3) - 81 tools** | Hermes | OpenClaw |
+| Capability | **GRID v3** | **Hermes Agent v0.23.4** | **OpenClaw v2026.11.10** |
 |---|---|---|---|
-| 🧠 **4-tier memory** (user profile · scenarios · atoms · offloaded refs) | ✅ built-in, auto-distills every 5 turns | ⚠️ SQLite + user modeling | ⚠️ file-based marks/YAML |
-| 🔍 **OSINT** (domain/IP/email/phone/username, dorking, webcam/CCTV) | ✅ **built-in** | ❌ none | ⚠️ web-search only |
-| 📡 **Network recon** (Nmap, DNS, netstat, full TCP/UDP netcat suite) | ✅ **built-in** | ❌ none | ⚠️ limited |
-| 🎛️ **SDR / HAM radio** (Radio-Browser, KiwiSDR, RTL-SDR) | ✅ **built-in** | ❌ | ❌ |
-| 🛰️ **Satellite tracking** (ISS, passes, TLE, catalog) | ✅ **built-in** | ❌ | ❌ |
-| 🔌 **Microcontroller IoT** (ESP32/Arduino/LoRa via serial & TCP) | ✅ **built-in** | ❌ | ❌ |
-| 👁️ **Computer vision** (OCR, faces, camera validation, video forensics) | ✅ **built-in** | ❌ | ⚠️ visual |
-| 🖱️ **Computer use** (mouse, keyboard, screen, typing) | ✅ | ✅ | ✅ |
-| 🪞 **Self-authoring skills** | ✅ | ✅ self-improving loop | ✅ 100+ skills |
-| 🗄️ **SQL analytics + sync** | ✅ DuckDB + PocketBase | ⚠️ SQLite | ⚠️ SQLite |
-| 💬 **Messaging** (Telegram, email, social agent) | ✅ | ✅ first-class | ✅ **first-class** |
-| 🚀 **LLM backends** | ✅ Ollama + any OpenAI-compatible | ✅ 200+ via OpenRouter | ✅ 15+ providers |
-| 🧾 **Deployment** | ✅ Python host + Compose Desktop + Android | Node/TS Electron | Python+Node Electron |
-| 🖥️ **Clients** | ✅ terminal, native desktop, Android, AG-UI API | ⚠️ CLI/IDE | ⚠️ chat apps |
+| **Primary focus** | Recon / field ops + local desktop/Android host | Self-improving generalist, coding and knowledge work | Messaging-first personal assistant and Gateway |
+| **Memory** | Profile + DuckDB atoms/scenarios/refs + transcript + offloaded refs | Agent-curated memory, FTS5 session search, Honcho user modeling, SQLite | **Knowledge** memory plugin + session/Gateway memory + compaction |
+| **OSINT** | Built-in domain/IP/email/phone/username, dorking, webcam/CCTV | Browser, web search, MCP/plugins; no dedicated recon suite | Deep Research with cited sources + browser; no dedicated recon suite |
+| **Network recon** | Built-in Nmap, DNS, netstat, TCP/UDP netcat suite | Generic shell/MCP + local/Docker/SSH/cloud terminal backends | Generic tools; no built-in recon suite |
+| **SDR / HAM radio** | Built-in Radio-Browser, KiwiSDR, RTL-SDR | Plugin/terminal only | Plugin/node only |
+| **Satellite tracking** | Built-in ISS, passes, TLE, catalog | Plugin/terminal only | Plugin/terminal only |
+| **Microcontroller IoT** | Built-in ESP32/Arduino/LoRa serial + TCP | Plugin/MCP only | Nodes/plugins only |
+| **Computer vision** | Built-in OCR, faces, camera validation, video forensics | Browser/computer-use MCP | Camera/screen nodes |
+| **Computer use** | Mouse, keyboard, screen, typing | Yes — Desktop, terminal backends, browser | Yes — native apps, nodes, browser |
+| **Self-authoring skills** | Yes | **Strongest** — auto-created/self-improving skills, 50 bundled + 150+ optional | Skills, plugins and ClawHub catalog |
+| **SQL / analytics** | DuckDB + optional PocketBase mirror | SQLite + FTS5 | SQLite Gateway/session store |
+| **Messaging** | Telegram, email, Moltbook social agent | Telegram, Discord, Slack, WhatsApp, Signal, Email | **20+ channels** — WhatsApp, Telegram, Slack, Discord, iMessage, Teams, … |
+| **LLM providers** | Ollama, LM Studio, OpenRouter, OpenAI | 300+ via Nous Portal/OpenRouter/OpenAI/local endpoints | Many providers, local Ollama/LM Studio, Claude/Codex harnesses |
+| **Clients** | Terminal + native Compose Desktop + Android + AG-UI API | desktop, CLI/TUI, web, messaging gateway | Native macOS/iOS/Android/Windows/Linux apps + Control UI + 20+ channels |
+| **Deployment** | Python host + Compose clients, local-first | Python/Node gateway, Docker, cloud sandboxes | Node Gateway + native apps, Docker, multiplayer |
+| **Enterprise** | Local-first, bring your own host | **Microsoft Foundry/Teams/Microsoft Store/Azure sandboxes**, Hermes Enterprise | OpenClaw Foundation, security presets, multiplayer claws |
+| **REA / passive teardown** | **Built-in authorized passive teardown** with reports and artifacts | Not a built-in workflow | Not a built-in workflow |
 
-### The pitch-line
-- **Hermes** is a great *coding agent* — but no OSINT, no network, no radio, no satellites, no vision. For anything past a text editor, **it's a brain with no hands.**
-- **OpenClaw** is the best *messaging gateway* — but it's a **heavy Node/Electron app built to babysit chat channels**, not to do field work.
-- **GRID alone** packs the **16-capability stack** — OSINT investigation, network ops, SDR capture, ISS passes, ESP32 control, and video forensics — **with memory that remembers who you are across sessions.** All on a slice of a laptop.
+### The honest pitch
 
-**✨ Bottom line —** Hermes writes your code. OpenClaw reads your DMs. **GRID recons the world.** If your work touches *networks, airwaves, orbit, or physical devices*, nothing else comes close.
+- **Hermes** is the strongest **self-improving generalist**. In November it shipped a single gateway for every surface, durable subagents, sub-second Azure sandboxes, Microsoft Teams/Store integration, 300+ models, and a deep skills/plugin ecosystem. If you want an agent that learns procedures and works across coding, knowledge work and messaging, Hermes is the reference.
+- **OpenClaw** is the strongest **messaging-first personal assistant**. In November it shipped **Knowledge** memory, cited Deep Research, browser handoff, agent templates, OpenClaw ID, multiplayer sessions, native apps on every major OS, and 20+ channels. If your assistant should live in chat apps and shared team spaces, OpenClaw is hard to beat.
+- **GRID** is the **field-ops / recon specialist**. It is the one with a purpose-built **OSINT + network + REA + SDR + satellite + microcontroller + vision** stack, a local DuckDB memory model, a native Compose Desktop + Android client, and an AG-UI API your own tools can talk to. It is not trying to out-skill Hermes or out-message OpenClaw; it is trying to give you hands in the field.
+
+**Bottom line:** Hermes grows with you. OpenClaw lives in your chats. **GRID recons the world.** If your work touches networks, airwaves, orbit, or physical devices — and you want it local-first with a native desktop/Android UI — GRID is the one to reach for.
 
 ---
 
