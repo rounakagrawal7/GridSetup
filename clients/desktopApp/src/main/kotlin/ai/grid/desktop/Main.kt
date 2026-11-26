@@ -346,6 +346,7 @@ private fun App(
     var provider by remember { mutableStateOf("") }
     var providerInfo by remember { mutableStateOf<ProviderInfo?>(null) }
     var showProviderDialog by remember { mutableStateOf(false) }
+    var showPairDialog by remember { mutableStateOf(false) }
     var threads by remember { mutableStateOf(emptyList<ThreadSummary>()) }
     var tools by remember { mutableStateOf(emptyList<ToolInfo>()) }
     var totalTokens by remember { mutableStateOf(0) }
@@ -1183,6 +1184,7 @@ private fun App(
             runCount = runCount,
             onModelChange = { changeModel(it) },
             onProviderChange = { openProviderDialog() },
+            onPairPhone = { showPairDialog = true },
             onThreadOpen = { openThread(it) },
             onRefreshThreads = { refreshThreads() },
             onClearHistory = {
@@ -1333,6 +1335,13 @@ private fun App(
                     }
                 }
             },
+        )
+    }
+    if (showPairDialog) {
+        PairPhoneDialog(
+            baseUrl = baseUrl,
+            token = token,
+            onDismiss = { showPairDialog = false },
         )
     }
     if (confirmClearHistory) {
@@ -1760,6 +1769,162 @@ private fun ProviderDialog(
 }
 
 @Composable
+private fun PairPhoneDialog(
+    baseUrl: String,
+    token: String,
+    onDismiss: () -> Unit,
+) {
+    val scope = rememberCoroutineScope()
+    var info by remember { mutableStateOf<PairingInfo?>(null) }
+    var busy by remember { mutableStateOf(false) }
+    var message by remember { mutableStateOf("Loading pairing code…") }
+    var remaining by remember { mutableStateOf(0) }
+    var copied by remember { mutableStateOf("") }
+
+    fun load(rotate: Boolean) {
+        if (busy) return
+        busy = true
+        message = if (rotate) "Generating a new code…" else "Loading pairing code…"
+        scope.launch {
+            try {
+                info = withContext(Dispatchers.IO) {
+                    fetchPairingInfo(baseUrl, token, rotate)
+                }
+                message = ""
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                message = error.message ?: "Could not load a pairing code."
+            } finally {
+                busy = false
+            }
+        }
+    }
+
+    fun copy(label: String, value: String) {
+        if (value.isBlank()) return
+        copyToClipboard(value)
+        copied = label
+    }
+
+    LaunchedEffect(Unit) { load(false) }
+    LaunchedEffect(info) {
+        var left = info?.expiresIn ?: 0
+        remaining = left
+        while (left > 0) {
+            delay(1000)
+            left -= 1
+            remaining = left
+        }
+    }
+    LaunchedEffect(copied) {
+        if (copied.isNotBlank()) {
+            delay(1500)
+            copied = ""
+        }
+    }
+
+    AlertDialog(
+        onDismissRequest = { if (!busy) onDismiss() },
+        title = { Text("Pair Android phone") },
+        text = {
+            Column {
+                Text(
+                    "1. Open GRID on the phone and tap Find GRID on Wi-Fi.",
+                    color = Muted,
+                    fontSize = 11.sp,
+                )
+                Spacer(Modifier.height(10.dp))
+                Text("2. Or enter this host URL:", color = Muted, fontSize = 10.sp)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        info?.url ?: "…",
+                        color = GridGreenDim,
+                        fontSize = 11.sp,
+                        fontFamily = FontFamily.Monospace,
+                        modifier = Modifier.weight(1f),
+                    )
+                    TextButton(
+                        onClick = { info?.let { copy("url", it.url) } },
+                        enabled = info != null,
+                    ) {
+                        Text(
+                            if (copied == "url") "Copied" else "Copy",
+                            color = if (copied == "url") GridGreen else Muted,
+                            fontSize = 9.sp,
+                        )
+                    }
+                }
+                if (info?.url?.contains("127.0.0.1") == true ||
+                    info?.url?.contains("localhost") == true
+                ) {
+                    Text(
+                        "Host is loopback-only. Set api.host to 0.0.0.0 and restart.",
+                        color = Warning,
+                        fontSize = 10.sp,
+                    )
+                }
+                Spacer(Modifier.height(12.dp))
+                Text("3. Enter this one-time code:", color = Muted, fontSize = 10.sp)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        info?.code ?: "------",
+                        color = GridGreen,
+                        fontSize = 32.sp,
+                        fontWeight = FontWeight.Bold,
+                        fontFamily = FontFamily.Monospace,
+                        letterSpacing = 6.sp,
+                        modifier = Modifier.weight(1f),
+                    )
+                    TextButton(
+                        onClick = { info?.let { copy("code", it.code) } },
+                        enabled = info != null,
+                    ) {
+                        Text(
+                            if (copied == "code") "Copied" else "Copy",
+                            color = if (copied == "code") GridGreen else Muted,
+                            fontSize = 9.sp,
+                        )
+                    }
+                }
+                Text(
+                    when {
+                        info == null -> message
+                        remaining > 0 ->
+                            "Valid ${remaining / 60}m ${remaining % 60}s · one-time"
+                        else -> "Code expired — generate a new one."
+                    },
+                    color = if (info != null && remaining == 0) Warning else Muted,
+                    fontSize = 10.sp,
+                    fontFamily = FontFamily.Monospace,
+                )
+                if (info != null && message.isNotBlank()) {
+                    Text(message, color = Danger, fontSize = 10.sp)
+                }
+                Spacer(Modifier.height(10.dp))
+                Text(
+                    "The phone stores the host token in the Android Keystore. " +
+                        "The code cannot be reused.",
+                    color = Muted,
+                    fontSize = 9.sp,
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) { Text("Close") }
+        },
+        dismissButton = {
+            TextButton(onClick = { load(true) }, enabled = !busy) {
+                Text("New code", color = GridGreen)
+            }
+        },
+        containerColor = PanelRaised,
+        titleContentColor = Color.White,
+        textContentColor = Muted,
+    )
+}
+
+@Composable
 private fun Sidebar(
     status: String,
     threadId: String,
@@ -1776,6 +1941,7 @@ private fun Sidebar(
     runCount: Int,
     onModelChange: (String) -> Unit,
     onProviderChange: () -> Unit,
+    onPairPhone: () -> Unit,
     onThreadOpen: (String) -> Unit,
     onRefreshThreads: () -> Unit,
     onClearHistory: () -> Unit,
@@ -1881,6 +2047,11 @@ private fun Sidebar(
             colors = ButtonDefaults.buttonColors(containerColor = PanelRaised, contentColor = GridGreen),
             modifier = Modifier.fillMaxWidth(),
         ) { Text("New thread") }
+        Spacer(Modifier.height(8.dp))
+        OutlinedButton(
+            onClick = onPairPhone,
+            modifier = Modifier.fillMaxWidth(),
+        ) { Text("Pair phone", fontSize = 11.sp) }
         Spacer(Modifier.height(10.dp))
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text("HISTORY", color = Muted, fontSize = 10.sp, letterSpacing = 1.5.sp)
@@ -3391,6 +3562,49 @@ private fun fetchProviderInfo(baseUrl: String, token: String): ProviderInfo? {
         }
     } catch (_: Exception) {
         null
+    }
+}
+
+private data class PairingInfo(
+    val url: String,
+    val code: String,
+    val expiresIn: Int,
+)
+
+private fun fetchPairingInfo(
+    baseUrl: String,
+    token: String,
+    rotate: Boolean,
+): PairingInfo {
+    val path = if (rotate) "/api/v1/pair/rotate" else "/api/v1/pair/code"
+    val connection = URI.create("$baseUrl$path").toURL().openConnection() as HttpURLConnection
+    connection.requestMethod = if (rotate) "POST" else "GET"
+    connection.setRequestProperty("Authorization", "Bearer $token")
+    connection.connectTimeout = 5000
+    connection.readTimeout = 10000
+    try {
+        if (rotate) {
+            connection.doOutput = true
+            connection.setRequestProperty("Content-Type", "application/json")
+            connection.outputStream.use { it.write("{}".toByteArray(Charsets.UTF_8)) }
+        }
+        val code = connection.responseCode
+        val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+        val text = stream?.bufferedReader()?.use { it.readText() }.orEmpty()
+        val root = Json.parseToJsonElement(text.ifBlank { "{}" }).jsonObject
+        if (code !in 200..299) {
+            throw IllegalStateException(
+                root["error"]?.jsonPrimitive?.contentOrNull
+                    ?: "Could not load a pairing code (HTTP $code)"
+            )
+        }
+        return PairingInfo(
+            url = root["url"]?.jsonPrimitive?.contentOrNull ?: "",
+            code = root["code"]?.jsonPrimitive?.contentOrNull ?: "",
+            expiresIn = root["expires_in"]?.jsonPrimitive?.intOrNull ?: 0,
+        )
+    } finally {
+        connection.disconnect()
     }
 }
 

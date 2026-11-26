@@ -68,6 +68,9 @@
   (`/pair`, `pair.ps1`) returns the bearer token without copying a 43-character
   secret. Codes expire after 15 minutes, are rate-limited per IP and rotate on
   every successful pairing.
+- Desktop **Pair phone** dialog: shows the LAN URL and a live 15-minute
+  countdown, Copy buttons for the URL/code, and a **New code** action backed by
+  `GET /api/v1/pair/code` and `POST /api/v1/pair/rotate`.
 - Server-driven UI MVP: locked catalog (`markdown`, `table`, `keyValue`, `card`,
   `button`, `form`, `select`, `approval`, `artifact`, `chart`), native Compose
   renderer, server-side macros, rich tool and REA findings surfaces, and

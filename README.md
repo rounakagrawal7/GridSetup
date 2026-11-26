@@ -610,7 +610,7 @@ adb install -r androidApp\build\outputs\apk\debug\androidApp-debug.apk
 On first launch, pair the phone instead of copying a secret:
 
 1. Start the host on the LAN (`api.host` set to `0.0.0.0`).
-2. On the PC, run `.\pair.ps1`. It prints the host URL and a 6-digit code valid for 15 minutes.
+2. In the desktop app click **Pair phone** (or run `.\pair.ps1` if the host is headless). It shows the host URL and a 6-digit code valid for 15 minutes.
 3. On the phone, tap **Find GRID on Wi-Fi** (or type the URL), select the host, enter the code, and tap **Pair**.
 
 The app stores the host token encrypted with an Android Keystore AES/GCM key. The code is one-time and rate-limited; pair only on a trusted LAN. Manual token entry remains under **OR PASTE THE API TOKEN** as a fallback.
