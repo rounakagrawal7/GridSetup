@@ -23,9 +23,10 @@ class ConsistencyTests(unittest.TestCase):
 
     def test_readme_counts(self):
         readme = (ROOT / "README.md").read_text(encoding="utf-8")
-        self.assertIn("80+ built-in tools", readme)
+        self.assertIn("81-tool reconnaissance stack", readme)
         self.assertIn("81-tool registry", readme)
         self.assertIn("16 capability groups", readme)
+        self.assertNotIn("80+ built-in tools", readme)
         self.assertNotIn("70+ built-in tools", readme)
 
     def test_changelog_status(self):
