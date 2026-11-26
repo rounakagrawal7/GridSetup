@@ -4,9 +4,9 @@
 
 ### General Reconnaissance & Intelligence Dashboard
 
-*An all-in-one, local-first agent for OSINT, networks, radio, satellites, microcontrollers, computer vision, and automation — with a persistent, human-like memory layer.*
+*Local-first AI agent with a native Compose Desktop app, Android companion, and an 81-tool reconnaissance stack.*
 
-[![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-blue.svg)](https://www.python.org/) [![Local-First](https://img.shields.io/badge/Local--First-Optional%20Sync-green.svg)](README.md) [![Tools](https://img.shields.io/badge/80%2B%20Tools-Recon%2FRadio%2FSAT%2FIoT-orange.svg)](README.md) [![User Manual](https://img.shields.io/badge/User%20Manual-GRID_Tools_Test_Guide-blueviolet.svg)](GRID_Tools_Test_Guide.docx)
+[![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-blue.svg)](https://www.python.org/) [![Tools](https://img.shields.io/badge/81%20Tools-Recon%2FRadio%2FSAT%2FIoT-orange.svg)](README.md) [![Desktop + Android](https://img.shields.io/badge/Desktop%20%2B%20Android-Compose%20Multiplatform-7F52FF.svg)](clients/) [![AG-UI 1.0](https://img.shields.io/badge/AG--UI-1.0-00FF88.svg)](docs/ADR-0002-kmp-agent-ui.md) [![Local-First](https://img.shields.io/badge/Local--First-Optional%20Sync-green.svg)](README.md) [![User Manual](https://img.shields.io/badge/User%20Manual-GRID_Tools_Test_Guide-blueviolet.svg)](GRID_Tools_Test_Guide.docx)
 
 </div>
 
@@ -16,9 +16,42 @@
 
 ## ✨ What is GRID?
 
-GRID is a self-aware terminal agent that runs locally, with optional network tools. It combines **16 capability groups** — OSINT, network recon, SDR/radio, satellite tracking, microcontroller IoT, computer vision, agent platforms, and automation — under a single conversational interface powered by your local LLM (Ollama), or any OpenAI-compatible backend.
+GRID is a self-aware agent that runs locally and can operate from three surfaces:
 
-Unlike tool wrappers that live or die on a fixed context window, GRID ships with a **layered memory engine** inspired by modern agent-memory research (e.g. Tencent's 4-tier memory pyramid). It doesn't forget between sessions: it distills what it learns into reusable knowledge instead of drowning in truncated logs.
+- **Terminal host** — `python grid_agent.py`
+- **Compose Desktop** — native chat, approvals, provider setup and thread replay
+- **Android companion** — the same host over your LAN
+
+It combines **16 capability groups** — OSINT, network recon, authorized REA, SDR/radio, satellite tracking, microcontroller IoT, computer vision, agent platforms, automation and more — under one conversational interface. Use a local **Ollama** model, **LM Studio**, **OpenRouter**, or **OpenAI**; switching providers does not restart the host.
+
+Memory is layered and local: a durable user profile, DuckDB atoms/scenarios, raw transcript, and offloaded tool refs. The desktop adds persisted threads, native tool surfaces, token/time meters, copy buttons, a stop control, and slash-command + subcommand autocomplete.
+
+### New in this build
+
+- **Desktop + Android clients** over AG-UI 1.0 (HTTP + SSE), with a shared Kotlin client.
+- **First-run setup**: choose provider, load models, write `config.json`, and start the local host from the desktop.
+- **Provider switching** in the sidebar: Ollama, LM Studio, OpenRouter, OpenAI.
+- **Thread history and replay**, including persisted tool cards; click a thread while a run is streaming to stop and reload it.
+- **Server-driven UI** (`grid_ui.py`): tool results and REA findings render as native cards, tables, key/value grids, charts and artifacts with a plain-text fallback.
+- **Slash subcommands** for `/social`, `/ctf`, `/rea`, `/satellite`, `/radio`, `/micro`, `/osint`, `/gcal`, `/gsheet`, `/jobs`, `/life`, `/memory`, `/persona` and `/pb`.
+- **PocketBase** is now available from `--api` mode as an optional mirror; **DuckDB** remains the primary memory/analytics store.
+
+---
+
+## 🖥️ Desktop & Android at a glance
+
+```text
+┌──────────────────────────────┐        HTTP + SSE         ┌──────────────────────────────┐
+│ Compose Desktop / Android    │ ────────────────────────▶ │ Python host (--api)          │
+│ - chat, threads, approvals   │                           │ - GridAPIServer              │
+│ - provider setup             │ ◀──────────────────────── │ - orchestrator + tools       │
+│ - native server-driven UI    │        AG-UI events       │ - DuckDB + thread store      │
+└──────────────────────────────┘                           └──────────────┬───────────────┘
+                                                                          │
+                                                          Ollama / LM Studio / OpenRouter / OpenAI
+```
+
+The desktop is not a mock UI: it launches the real Python host, streams real tool events, and can stop the host with `/shutdown`. The Android app uses the same API and token.
 
 ---
 
@@ -87,7 +120,7 @@ PocketBase does **not** need the Python `pocketbase` package. `grid_pb.py` talks
 
 ## 🥊 GRID vs Hermes vs OpenClaw — Why GRID Wins
 
-GRID isn't another messaging tool for one AI. It's the **only agent that fuses a full OSINT / field-ops stack directly to a human-like memory**. Hermes and OpenClaw give you a *chat brain* with toys bolted on — GRID ships as a **recon dashboard, a radio rig, a satellite dish, a camera lab, and a microcontroller bench**, all in one terminal. And it does it with **1 file to run** (`python grid_agent.py`), **local-first operation**, and **80+ built-in tools / 100+ sub-commands**.
+GRID isn't another messaging tool for one AI. It's the **only agent that fuses a full OSINT / field-ops stack directly to a human-like memory**. Hermes and OpenClaw give you a *chat brain* with toys bolted on — GRID ships as a **recon dashboard, a radio rig, a satellite dish, a camera lab, and a microcontroller bench**, from a terminal host plus native desktop and Android clients. And it does it with **local-first operation**, **81 built-in tools / 100+ sub-commands**, and an API your own clients can use.
 
 | Capability | **GRID (v3) - 81 tools** | Hermes | OpenClaw |
 |---|---|---|---|
@@ -103,7 +136,8 @@ GRID isn't another messaging tool for one AI. It's the **only agent that fuses a
 | 🗄️ **SQL analytics + sync** | ✅ DuckDB + PocketBase | ⚠️ SQLite | ⚠️ SQLite |
 | 💬 **Messaging** (Telegram, email, social agent) | ✅ | ✅ first-class | ✅ **first-class** |
 | 🚀 **LLM backends** | ✅ Ollama + any OpenAI-compatible | ✅ 200+ via OpenRouter | ✅ 15+ providers |
-| 🧾 **Deployment** | ✅ Python, 1 process, local | Node/TS Electron | Python+Node Electron |
+| 🧾 **Deployment** | ✅ Python host + Compose Desktop + Android | Node/TS Electron | Python+Node Electron |
+| 🖥️ **Clients** | ✅ terminal, native desktop, Android, AG-UI API | ⚠️ CLI/IDE | ⚠️ chat apps |
 
 ### The pitch-line
 - **Hermes** is a great *coding agent* — but no OSINT, no network, no radio, no satellites, no vision. For anything past a text editor, **it's a brain with no hands.**
@@ -117,7 +151,9 @@ GRID isn't another messaging tool for one AI. It's the **only agent that fuses a
 ## Requirements
 
 - **Python 3.10+**
-- **Ollama** (local LLM) — https://ollama.ai
+- **Ollama** (local LLM) — https://ollama.ai — or LM Studio / OpenRouter / OpenAI
+- **Java 21** for the Compose Desktop and Android builds
+- **Android SDK** if building the Android companion
 - **Tesseract OCR** *(optional)* — for image text extraction:
   - `winget install UB-Mannheim.TesseractOCR`
   - or https://github.com/UB-Mannheim/tesseract/wiki
@@ -133,6 +169,36 @@ python grid_agent.py
 ```
 
 On first launch, select your LLM backend (Ollama), then pick a model.
+
+### Desktop app
+
+The desktop can start the Python host itself. From a fresh clone:
+
+```powershell
+cd clients
+.\gradlew.bat :desktopApp:run
+```
+
+Click **Start GRID host**, choose a provider, load models, and connect. If you prefer to run the host separately:
+
+```powershell
+# terminal 1
+python grid_agent.py --api --no-input
+
+# terminal 2
+cd clients
+.\gradlew.bat :desktopApp:run
+```
+
+### Android companion
+
+```powershell
+cd clients
+.\gradlew.bat :androidApp:assembleDebug
+adb install -r androidApp\build\outputs\apk\debug\androidApp-debug.apk
+```
+
+On first launch, enter the host URL and the contents of `run/api_token`. See [Kotlin clients](#kotlin-clients-desktop--android) for LAN setup.
 
 ### Clean start (recommended)
 
@@ -159,7 +225,7 @@ Copy-Item config.example.json config.json
 .\.venv\Scripts\python.exe grid_agent.py --no-input
 ```
 
-`--check` verifies Python, the required imports, `config.json`, the Ollama server, the selected model and the 80-tool registry. It does not start PocketBase or touch `grid_data.duckdb`.
+`--check` verifies Python, the required imports, `config.json`, the Ollama server, the selected model and the 81-tool registry. It does not start PocketBase or touch `grid_data.duckdb`.
 
 Useful flags:
 
@@ -169,11 +235,23 @@ Useful flags:
 
 If `--check` fails, fix the FAIL lines it prints. Do not launch until all required checks pass.
 
-If the model says it has no tools, make sure Ollama is running and the model supports at least a 16k context. GRID sets `num_ctx=16384`; a smaller context truncates the 80-tool schema.
+If the model says it has no tools, make sure Ollama is running and the model supports at least a 16k context. GRID sets `num_ctx=16384`; a smaller context truncates the 81-tool schema.
 
 ### Chat input
 
-Type `/` and press **Tab** to complete a slash command. Subcommands complete too (`/persona ` shows `set` and `clear`). **Up/Down** walks prompt history, and matching history appears as grey inline text.
+**Terminal:** type `/` and press **Tab** to complete a slash command. Subcommands complete too (`/persona ` shows `set` and `clear`). **Up/Down** walks prompt history, and matching history appears as grey inline text.
+
+**Desktop:** type `/` for the command palette. Type a space after a command with documented subcommands (`/social `, `/ctf `, `/rea `, `/satellite `, `/radio `, `/micro `, `/osint `, `/gcal `, `/gsheet `, `/jobs `, `/life `, `/memory `, `/persona `, `/pb `) to open the second-level palette. Arrow keys select, Tab completes, Enter executes no-arg subcommands immediately, and Esc closes the palette. `/help`, `/new`, `/clear`, `/exit`, `/provider`, `/model`, `/tokens`, `/rea`, `/tools`, `/tool` are local; the rest route through the host.
+
+### Desktop quick tour
+
+- **Sidebar** — host status, thread, endpoint, provider, model, token meter, history, quick prompts.
+- **Change provider** — provider, base URL, API key, model dropdown, Refresh.
+- **Change model** — switch models without restarting the host.
+- **HISTORY** — persisted threads; click to replay, **Refresh** to reload, **Clear** to delete threads only.
+- **Composer** — `/` commands, subcommands, Enter to send, Stop while streaming.
+- **Tool cards** — native server-driven UI surfaces (tables, key/value grids, findings, artifacts) with copy buttons.
+- **Activity row** — `Thinking…` with elapsed time, then `+commands · edits · thoughts · reads · tools`.
 
 ### GRID Life
 
@@ -393,6 +471,7 @@ Endpoints:
 | `GET` | `/api/v1/provider` | active provider and supported providers |
 | `POST` | `/api/v1/provider` | switch provider, URL, key and model |
 | `POST` | `/api/v1/provider/models` | list models for a provider without switching |
+| `GET` | `/api/v1/tools` | tool registry + subcommand metadata |
 | `GET` | `/api/v1/ui/catalog` | locked server-driven UI component catalog |
 | `POST` | `/api/v1/ui/action` | submit a rendered form/button action |
 | `POST` | `/api/v1/command` | run a terminal-style local command (`/memory`, `/life`, `/plan`, `/jobs`, ...) |
@@ -421,38 +500,96 @@ Config:
 
 ### Kotlin clients (desktop + Android)
 
-The Compose Desktop shell and Android companion live under `clients/` and talk to `--api` over AG-UI.
+The Compose Desktop shell and Android companion live under `clients/` and talk to `--api` over AG-UI 1.0 (HTTP + SSE). The desktop is the canonical client; Android is a companion.
+
+#### Run the desktop
 
 ```powershell
-# terminal 1 (optional): the desktop can start the host for you
-python grid_agent.py --api --no-input
-
-# terminal 2: desktop
 cd clients
 .\gradlew.bat :desktopApp:run
 ```
 
-On a machine with no running host, the desktop opens a **Start GRID** screen instead of failing: choose **Ollama**, **LM Studio**, **OpenRouter** or **OpenAI**, set the base URL, API key (when needed) and model, then click **Start GRID host**. The model field is a dropdown that loads the provider's available models (with a Refresh button and manual entry). It writes `config.json` and launches the local Python host itself. The provider can be changed later from **Change provider** in the left sidebar.
+The desktop can start the host itself. If the API is offline, it opens **Start GRID**:
+
+1. Choose **Ollama**, **LM Studio**, **OpenRouter** or **OpenAI**.
+2. Set the base URL and API key (cloud providers).
+3. Click **Load** and pick a model from the dropdown.
+4. Click **Start GRID host** — GRID writes `config.json`, launches `.venv/Scripts/python.exe grid_agent.py --api --no-input --no-banner`, waits for `run/api_token`, and connects.
+
+You can also run the host separately:
+
+```powershell
+python grid_agent.py --api --no-input
+```
+
+#### Providers
+
+| Provider | Transport | Key |
+|---|---|---|
+| Ollama | local HTTP `:11434` | none |
+| LM Studio | local OpenAI-compatible `:1234/v1` | none |
+| OpenRouter | HTTPS `openrouter.ai/api/v1` | required |
+| OpenAI | HTTPS `api.openai.com/v1` | required |
+
+**Change provider** in the sidebar rebuilds the backend without restarting the host and persists the choice to `config.json`. **Change model** switches models on the current provider.
+
+#### Desktop features
+
+- Live user/assistant bubbles, tool cards, REA artifact cards and approval cards.
+- **Thinking…** row with elapsed time, a **Stop** button, and a `+commands · edits · thoughts · reads · tools` summary.
+- Session token meter and per-reply duration/tokens.
+- Copy button on every user message, assistant reply, note and tool output.
+- Visible chat scrollbar and a scrollable sidebar.
+- `/exit` saves memory and closes the desktop; the host keeps running.
+- `/shutdown` saves, stops the API host and suppresses resident auto-restart, then closes the desktop.
+
+#### Threads and history
+
+Threads are persisted server-side in `run/api_threads.json` (gitignored). Each turn stores user/assistant text plus tool cards.
+
+- **HISTORY** lists recent threads; click to replay.
+- **Refresh** reloads the list.
+- **Clear** deletes saved threads only — `memory.md`, `grid_persona.md`, user profile, goals and config are untouched.
+- Clicking a thread while a response is streaming stops that response and opens the thread.
+- Message counts include conversation messages, not internal tool records.
+
+#### Commands and subcommands
+
+Type `/` in the composer for the command palette. Examples:
+
+```text
+/social            then space → persona, register, post, feed, auto, engage, writeup ...
+/ctf               then space → start, status, hint, submit, score, reset, list
+/rea               then space → authorized, authorize, revoke, list, status
+/satellite         then space → iss, position, passes, tle, search, list, analyze
+/radio /micro /osint /gcal /gsheet /jobs /life /memory /persona /pb
+```
+
+- **↑/↓** selects, **Tab** completes, **Esc** closes.
+- **Enter** executes no-arg subcommands immediately (`/social auto`, `/ctf list`, `/rea list`).
+- Arg subcommands complete with a trailing space (`/social post `, `/ctf submit `).
+- Tool subcommand metadata comes from `grid_subcommands.py` via `GET /api/v1/tools`.
+- Interactive-only items such as `/jobs new` and `/life awake` are marked “terminal”.
 
 #### Server-driven UI (A2UI subset)
 
-GRID emits a constrained `CUSTOM grid.ui` AG-UI event alongside tool results. The payload is a JSON component tree, never HTML or JavaScript. The locked catalog lives in `grid_ui.py`:
+Tool results and REA findings emit `CUSTOM grid.ui` over the existing AG-UI stream. The payload is a JSON component tree, never HTML or JavaScript.
+
+Locked catalog (`grid_ui.py`):
 
 ```text
 markdown · table · keyValue · card · button · form · select
 approval · artifact · chart
 ```
 
-- The desktop renders the tree with native Compose widgets; Android ignores it and keeps the plain-text tool card as fallback.
-- Every surface carries a `fallback` string, so clients without the renderer still show the full tool output.
-- `tool result` and `REA` surfaces are generated server-side. The REA surface parses the report manifest and writes a findings table plus an **Open report** artifact.
-- Macros (`@ui_macro`) expand server-side. Sensitive values are bound by the server and never included in model output.
+- Desktop renders the tree with native Compose widgets.
+- Android ignores `grid.ui` and keeps the existing text tool card as fallback.
+- Every surface carries a `fallback` string; unknown components degrade to text.
+- Server-side macros (`@ui_macro`) bind sensitive data without exposing it to the model.
+- REA maps the report manifest into counts, missing headers, a findings table and an **Open report** artifact.
 - Form/button actions post to `POST /api/v1/ui/action`; approvals reuse the existing approval endpoint.
-- The catalog is intentionally small and schema-validated; unknown component types fall back to text.
 
-The desktop finds the token at `../run/api_token`, `run/api_token`, or `GRID_API_TOKEN`; pass `--url` or `--token-file` to override. It renders user/assistant messages, live tool cards, REA report artifacts, and approval requests. Tool-only runs show a single tool card (no duplicated assistant bubble); each assistant reply carries its duration and token count, the sidebar has a session token meter, and the chat has a visible scrollbar. User messages, assistant replies, server-command notes and tool outputs each have a small copy icon that copies the full text. The **HISTORY** list in the sidebar shows persisted threads and reloads a conversation, including its tool cards, when clicked. **Clear** deletes saved threads only; `memory.md`, the user profile, persona, goals and config are not touched. Clicking a thread while a response is streaming stops that response first. While a run is active the chat shows a live **Thinking…** row with elapsed time, a **Stop** button appears next to the composer, then a compact process summary such as `+2 commands · 1 edit · 3 thoughts · 1 read · 1 tool`. The model is shown in the sidebar and can be switched from the **Change model** menu without restarting. Type `/` in the composer for the command palette (`/help`, `/new`, `/clear`, `/exit`, `/provider`, `/model`, `/tokens`, `/rea`, `/tools`, `/tool`, every registered GRID tool, and terminal-style commands), with arrow-key selection and Tab completion; the cursor lands at the end of the completed command. Typing a space after a command with documented subcommands (`/social`, `/ctf`, `/rea`, `/satellite`, `/radio`, `/micro`, `/osint`, `/gcal`, `/gsheet`, `/jobs`, `/life`, `/memory`, `/persona`, `/pb`) opens a second-level palette; subcommands execute through the same API or tool route. Local commands such as `/memory`, `/life`, `/plan`, `/ref`, `/jobs`, `/pb`, `/persona`, `/social`, `/comms`, `/ctf`, `/game`, `/gcal`, `/gsheet`, `/save` and `/export` run against the host through `POST /api/v1/command` and render their output in chat. `/exit` saves host conversation memory (and syncs PocketBase when connected) before closing the desktop. `/shutdown` asks for confirmation, then saves and stops the API host, autopilot and Android connectivity before closing the desktop.
-
-Android:
+#### Android companion
 
 ```powershell
 cd clients
@@ -460,15 +597,24 @@ cd clients
 adb install -r androidApp\build\outputs\apk\debug\androidApp-debug.apk
 ```
 
-On first launch, enter the host URL and paste the contents of `run/api_token`. The token is encrypted with an Android Keystore AES/GCM key. The default URL is `http://10.0.2.2:8771` for the emulator. For a physical device, set `api.host` to `0.0.0.0` in `config.json` (LAN exposure; token still required), restart `--api`, and use `http://<computer-LAN-IP>:8771`. Cleartext HTTP is allowed for this development build.
+On first launch, enter the host URL and paste `run/api_token`. The token is encrypted with an Android Keystore AES/GCM key.
 
-The AG-UI Kotlin SDK is compiled for Java 21. Gradle uses the foojay toolchain resolver to download a Java 21 toolchain for compilation and runs; `clients/local.properties` must point at the Android SDK (`sdk.dir`).
+- Emulator URL: `http://10.0.2.2:8771`
+- Physical device: set `api.host` to `0.0.0.0` in `config.json`, restart `--api`, and use `http://<computer-LAN-IP>:8771`.
+- LAN exposure should be token-protected; cleartext HTTP is allowed in this development build.
+
+#### Build details
+
+- The AG-UI Kotlin SDK and Compose clients compile and run on **Java 21**.
+- Gradle uses the foojay toolchain resolver to fetch Java 21 when needed.
+- `clients/local.properties` must point at the Android SDK (`sdk.dir=...`).
 
 | Path | Purpose |
 |---|---|
-| `clients/shared/` | KMP client wrapper, `GridEvent` model, SSE contract test |
+| `clients/shared/` | KMP `GridAgentClient`, `GridEvent` model, SSE contract test |
 | `clients/desktopApp/` | Compose Desktop UI |
 | `clients/androidApp/` | Android Compose companion + Keystore token store |
+
 
 ### Context compression
 
@@ -541,8 +687,9 @@ The `email` section must already have working SMTP settings. With `mode: "auto"`
 | `grid_agent.py` | Main app — CLI, tool registry, orchestrator, **layered memory** |
 | `grid_vision.py` | Computer vision — OCR, face detection, camera validation, video forensics |
 | `grid_osint.py` | OSINT engine — domain/IP/email/phone/username intel, camera search, dorking |
-| `grid_db.py` | DuckDB layer — tool logging, caching, analytics, **memory tables** |
-| `grid_pb.py` | PocketBase integration — cloud sync, artifact upload |
+| `grid_db.py` | DuckDB layer - tool logging, caching, analytics, **memory tables** |
+| `grid_pb.py` | Optional PocketBase mirror/admin integration (local HTTP + binary) |
+| `grid_rea.py` | Authorized passive reverse-engineering teardown |
 | `grid_satellite.py` | Satellite tracking (ISS, passes, TLE, catalog) |
 | `grid_radio.py` | Radio & SDR (Radio-Browser, KiwiSDR, RTL-SDR) |
 | `grid_micro.py` | Microcontroller IoT (ESP32, Arduino, LoRa) |
@@ -555,7 +702,9 @@ The `email` section must already have working SMTP settings. With `mode: "auto"`
 | `grid_api.py` | Local AG-UI HTTP/SSE API for desktop and Android clients |
 | `grid_ui.py` | Locked server-driven UI catalog, macros and native Compose surfaces |
 | `grid_subcommands.py` | Subcommand metadata for slash autocomplete |
-| `clients/` | Kotlin Multiplatform client + Compose Desktop shell |
+| `clients/` | KMP shared client + Compose Desktop + Android companion |
+| `tests/` | Python API, REA, consistency and docs tests |
+| `samples/rea-demo/` | Repeatable local REA fixture |
 | `tools/` | Optional profile backfill, pilot harness and boot-window logger |
 | `grid_permissions.py` | Ask/auto/read-only policy for autonomous tool use |
 | `grid_docs.py` | `document_read` + optional MarkItDown |
@@ -693,6 +842,8 @@ A single cycle runs all phases: reply to new comments on **your own posts**, upv
 
 ## Commands
 
+### Terminal
+
 | Command | Action |
 |---|---|
 | `/exit` | Save and exit |
@@ -706,9 +857,40 @@ A single cycle runs all phases: reply to new comments on **your own posts**, upv
 | `/apikey` | Configure API keys (YouTube, Shodan, VirusTotal, etc.) |
 | `/help` | Show command reference |
 
+### Desktop
+
+| Command | Action |
+|---|---|
+| `/help` | Show app commands, tools and subcommand hints |
+| `/new` | Start a new thread |
+| `/clear` | Clear the current desktop conversation |
+| `/exit` | Save memory and close the desktop; host keeps running |
+| `/shutdown` | Save, stop the host, and close |
+| `/provider` | Open the provider dialog |
+| `/model` | Show active/available models |
+| `/tokens` | Session token/time stats |
+| `/rea` | Authorized teardown or allowlist commands |
+| `/tools`, `/tool` | List tools / run a tool |
+| `/memory`, `/life`, `/jobs`, `/persona`, `/social`, `/pb`, `/ctf`, `/game`, `/gcal`, `/gsheet`, `/comms`, `/export`, `/save` | Host commands |
+| `/social `, `/ctf `, `/rea `, … | Second-level subcommand palette |
+
+## Validation
+
+```powershell
+# Python
+.\.venv\Scripts\python.exe -m unittest discover -s tests
+.\.venv\Scripts\python.exe evals\run_evals.py
+
+# KMP clients
+cd clients
+.\gradlew.bat :shared:jvmTest :desktopApp:compileKotlin :androidApp:assembleDebug
+```
+
+Current suite: **160 tests**, **51/51 routing evals**, desktop compile and Android debug APK.
+
 ## Documentation
 
-Open `GRID_Tools_Test_Guide.docx` for the complete user manual, tool descriptions, examples, and quick-reference commands.
+Open `GRID_Tools_Test_Guide.docx` for the complete user manual, tool descriptions, examples, and quick-reference commands. See `docs/ADR-0002-kmp-agent-ui.md` for the desktop/Android protocol and storage decisions.
 
 ## License
 
