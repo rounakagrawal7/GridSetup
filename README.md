@@ -556,6 +556,7 @@ Threads are persisted server-side in `run/api_threads.json` (gitignored). Each t
 - **Clear** deletes saved threads only — `memory.md`, `grid_persona.md`, user profile, goals and config are untouched.
 - Clicking a thread while a response is streaming stops that response and opens the thread.
 - Message counts include conversation messages, not internal tool records.
+- Threads written before v3.2 may contain only their final turn. New turns append correctly, but older threads cannot be backfilled — start a new thread for a clean history.
 
 #### Commands and subcommands
 
@@ -890,7 +891,7 @@ cd clients
 .\gradlew.bat :shared:jvmTest :desktopApp:compileKotlin :androidApp:assembleDebug
 ```
 
-Current suite: **160 tests**, **51/51 routing evals**, desktop compile and Android debug APK.
+Current suite: **160 tests**, **51/51 routing evals**, desktop compile, Android debug APK, and an Android emulator smoke test (Pixel 8, API 36) covering first-run setup, health check, streaming chat, tool cards, new-thread reset and token persistence across an app restart.
 
 ## Documentation
 
