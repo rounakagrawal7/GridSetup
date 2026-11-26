@@ -350,6 +350,8 @@ private fun App(
     var lastLatency by remember { mutableStateOf(0L) }
     var lastTokens by remember { mutableStateOf(0) }
     var runCount by remember { mutableStateOf(0) }
+    var currentAssistantId by remember { mutableStateOf<String?>(null) }
+    var pendingStats by remember { mutableStateOf<GridEvent.Stats?>(null) }
     var setupProvider by remember { mutableStateOf("ollama") }
     var setupUrl by remember { mutableStateOf(providerDefaultUrl("ollama")) }
     var setupKey by remember { mutableStateOf("") }
@@ -471,21 +473,45 @@ private fun App(
             is GridEvent.RunStarted -> {
                 threadId = event.threadId
                 status = "Running ${event.runId.take(10)}"
+                currentAssistantId = null
+                pendingStats = null
             }
             is GridEvent.StepStarted -> status = "Step: ${event.name}"
             is GridEvent.StepFinished -> status = "Working"
             is GridEvent.MessageStarted -> {
+                currentAssistantId = event.messageId
                 if (items.none { it is Item.Assistant && it.id == event.messageId }) {
-                    items.add(Item.Assistant(event.messageId, ""))
+                    val stats = pendingStats
+                    items.add(
+                        Item.Assistant(
+                            event.messageId,
+                            "",
+                            durationMs = stats?.durationMs ?: 0,
+                            tokens = stats?.totalTokens ?: 0,
+                            estimated = stats?.estimated ?: false,
+                        )
+                    )
+                    pendingStats = null
                 }
             }
             is GridEvent.TextDelta -> {
+                currentAssistantId = event.messageId
                 val index = items.indexOfLast { it is Item.Assistant && it.id == event.messageId }
                 if (index >= 0) {
                     val old = items[index] as Item.Assistant
                     items[index] = old.copy(text = old.text + event.delta)
                 } else {
-                    items.add(Item.Assistant(event.messageId, event.delta))
+                    val stats = pendingStats
+                    items.add(
+                        Item.Assistant(
+                            event.messageId,
+                            event.delta,
+                            durationMs = stats?.durationMs ?: 0,
+                            tokens = stats?.totalTokens ?: 0,
+                            estimated = stats?.estimated ?: false,
+                        )
+                    )
+                    pendingStats = null
                 }
             }
             is GridEvent.MessageFinished -> Unit
@@ -529,14 +555,19 @@ private fun App(
                 lastLatency = event.durationMs
                 lastTokens = event.totalTokens
                 runCount += 1
-                val index = items.indexOfLast { it is Item.Assistant }
-                if (index >= 0) {
-                    val old = items[index] as Item.Assistant
-                    items[index] = old.copy(
-                        durationMs = event.durationMs,
-                        tokens = event.totalTokens,
-                        estimated = event.estimated,
-                    )
+                pendingStats = event
+                val id = currentAssistantId
+                if (id != null) {
+                    val index = items.indexOfLast { it is Item.Assistant && it.id == id }
+                    if (index >= 0) {
+                        val old = items[index] as Item.Assistant
+                        items[index] = old.copy(
+                            durationMs = event.durationMs,
+                            tokens = event.totalTokens,
+                            estimated = event.estimated,
+                        )
+                        pendingStats = null
+                    }
                 }
             }
             is GridEvent.Ui -> {
@@ -584,6 +615,8 @@ private fun App(
                 finishActivity()
                 busy = false
                 status = "Ready"
+                currentAssistantId = null
+                pendingStats = null
                 scope.launch {
                     val list = withContext(Dispatchers.IO) {
                         fetchThreads(baseUrl, token)
@@ -596,6 +629,8 @@ private fun App(
                 items.add(Item.Error(event.message))
                 busy = false
                 status = "Error"
+                currentAssistantId = null
+                pendingStats = null
             }
             is GridEvent.Other -> Unit
         }

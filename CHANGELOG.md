@@ -47,9 +47,18 @@
   `/comms`, `/ctf`, `/game`, `/gcal`, `/gsheet`, `/save` and `/export` work
   directly from the desktop composer and render their output in chat.
 - Android parity: the composer now has `/` command and subcommand autocomplete
-  (tap to insert) and routes server commands through `POST /api/v1/command`, so
-  `/memory status`, `/rea status`, `/pb status`, `/model`, `/tools` and the
-  registered tool commands behave like they do on the desktop.
+  (tap to insert with the caret at the end) and routes server commands through
+  `POST /api/v1/command`, so `/memory status`, `/rea status`, `/pb status`,
+  `/model`, `/tools` and the registered tool commands behave like they do on
+  the desktop.
+- Android chat surface: the header shows the active model/provider and a
+  session token meter, **Model & provider** switches either live, **History**
+  replays saved threads (including after **New**), and every message has a
+  **Copy** button.
+- Fixed per-message stats attribution in both clients: the host emits
+  `grid.stats` before `TEXT_MESSAGE_START`, so timing/token counts were being
+  attached to the previous assistant reply. They now wait for the current
+  message and land on the correct one.
 - Server-driven UI MVP: locked catalog (`markdown`, `table`, `keyValue`, `card`,
   `button`, `form`, `select`, `approval`, `artifact`, `chart`), native Compose
   renderer, server-side macros, rich tool and REA findings surfaces, and

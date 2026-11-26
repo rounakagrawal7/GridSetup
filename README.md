@@ -604,8 +604,11 @@ adb install -r androidApp\build\outputs\apk\debug\androidApp-debug.apk
 
 On first launch, enter the host URL and paste `run/api_token`. The token is encrypted with an Android Keystore AES/GCM key.
 
-- Type `/` for command autocomplete. Choosing a command opens its subcommands; tap either to insert it into the composer.
+- Type `/` for command autocomplete. Choosing a command opens its subcommands; tap either to insert it into the composer with the caret at the end.
 - Slash commands execute on the host through `POST /api/v1/command` — for example `/memory status`, `/rea status`, `/pb status`, `/model` and `/tools`.
+- The header shows the active model and provider plus a session token meter. Tap the model line to open **Model & provider** and switch either one.
+- **History** lists saved host threads, including the ones from before you started a new thread. Tap one to replay text and tool cards.
+- Every user, assistant, tool and system message has a **Copy** button.
 - Emulator URL: `http://10.0.2.2:8771`
 - Physical device: set `api.host` to `0.0.0.0` in `config.json`, restart `--api`, and use `http://<computer-LAN-IP>:8771`.
 - LAN exposure should be token-protected; cleartext HTTP is allowed in this development build.
