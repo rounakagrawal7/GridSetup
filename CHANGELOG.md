@@ -72,6 +72,9 @@
 - Android activity line matches the desktop: **Thinking…** with elapsed time
   while a run is active, then a completed **✓ +N commands · N edits · N
   thoughts · N reads · N tools** summary, using the same tool classification.
+- Android **Copy full chat**: the header **⧉** button exports the whole thread
+  (messages, tool inputs/results, stats, system notes) as one text block, so
+  test results can be shared without screenshots.
 - Desktop **Pair phone** dialog: shows the LAN URL and a live 15-minute
   countdown, Copy buttons for the URL/code, and a **New code** action backed by
   `GET /api/v1/pair/code` and `POST /api/v1/pair/rotate`.

@@ -62,6 +62,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.font.FontFamily
@@ -353,6 +355,14 @@ private fun ChatScreen(baseUrl: String, token: String, onSettings: () -> Unit) {
     val client = remember(baseUrl, token) { GridAgentClient(baseUrl, token) }
     val focusRequester = remember { FocusRequester() }
     val keyboard = LocalSoftwareKeyboardController.current
+    val clipboard = LocalClipboardManager.current
+    var chatCopied by remember { mutableStateOf(false) }
+    LaunchedEffect(chatCopied) {
+        if (chatCopied) {
+            delay(1500)
+            chatCopied = false
+        }
+    }
 
     LaunchedEffect(baseUrl, token) {
         status = "Connecting"
@@ -726,7 +736,32 @@ private fun ChatScreen(baseUrl: String, token: String, onSettings: () -> Unit) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text("GRID", color = GridGreen, fontSize = 24.sp, fontWeight = FontWeight.Bold)
                 Spacer(Modifier.weight(1f))
-                Text(status, color = if (status == "API offline") Danger else GridGreenDim, fontSize = 11.sp)
+                TextButton(
+                    onClick = {
+                        clipboard.setText(
+                            AnnotatedString(fullChatText(threadId, model, provider, items))
+                        )
+                        chatCopied = true
+                    },
+                    contentPadding = PaddingValues(horizontal = 6.dp),
+                    modifier = Modifier.semantics {
+                        contentDescription = "Copy full chat"
+                    },
+                ) {
+                    Text(
+                        if (chatCopied) "✓" else "⧉",
+                        color = if (chatCopied) GridGreen else Muted,
+                        fontSize = 15.sp,
+                    )
+                }
+                Spacer(Modifier.width(4.dp))
+                Text(
+                    status,
+                    color = if (status == "API offline") Danger else GridGreenDim,
+                    fontSize = 11.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
             }
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
@@ -1589,6 +1624,84 @@ private fun activityText(activity: Item.Activity): String {
     add(activity.reads, "read", "reads")
     add(activity.tools, "tool", "tools")
     return parts.joinToString(" · ")
+}
+
+private fun fullChatText(
+    threadId: String,
+    model: String,
+    provider: String,
+    items: List<Item>,
+): String {
+    val text = StringBuilder()
+    text.appendLine("GRID conversation")
+    text.appendLine("Thread: $threadId")
+    if (model.isNotBlank() || provider.isNotBlank()) {
+        text.appendLine(
+            "Model: ${model.ifBlank { "(unknown)" }} · " +
+                provider.ifBlank { "(unknown)" }
+        )
+    }
+    text.appendLine()
+    items.forEach { item ->
+        when (item) {
+            is Item.User -> {
+                text.appendLine("USER:")
+                text.appendLine(item.text)
+                text.appendLine()
+            }
+            is Item.Assistant -> {
+                text.appendLine("GRID:")
+                text.appendLine(item.text.ifBlank { "(no text)" })
+                if (item.durationMs > 0 || item.tokens > 0) {
+                    text.appendLine(
+                        "(${formatDuration(item.durationMs)} · " +
+                            "${formatTokens(item.tokens)}" +
+                            (if (item.estimated) " est." else "") + " tok)"
+                    )
+                }
+                text.appendLine()
+            }
+            is Item.Tool -> {
+                text.appendLine("TOOL: ${item.name}")
+                if (item.args.isNotBlank()) {
+                    text.appendLine("Input: ${item.args}")
+                }
+                text.appendLine(
+                    "Output: " + (item.result?.ifBlank { "(no output)" } ?: "(pending)")
+                )
+                text.appendLine()
+            }
+            is Item.Artifact -> {
+                text.appendLine("ARTIFACT: ${item.path}")
+                text.appendLine()
+            }
+            is Item.Approval -> {
+                text.appendLine("APPROVAL: ${item.tool} (risk: ${item.risk})")
+                text.appendLine("Input: ${item.input}")
+                text.appendLine(
+                    "Status: " + if (item.resolved) "answered" else "pending"
+                )
+                text.appendLine()
+            }
+            is Item.Error -> {
+                text.appendLine("ERROR:")
+                text.appendLine(item.message)
+                text.appendLine()
+            }
+            is Item.System -> {
+                text.appendLine("SYSTEM:")
+                text.appendLine(item.message)
+                text.appendLine()
+            }
+            is Item.Activity -> {
+                if (item.total > 0) {
+                    text.appendLine("[${activityText(item)}]")
+                    text.appendLine()
+                }
+            }
+        }
+    }
+    return text.toString().trimEnd() + "\n"
 }
 
 private fun formatDuration(ms: Long): String =

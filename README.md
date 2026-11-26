@@ -620,6 +620,7 @@ The setup screen has no URL or API-token fields. The app stores the host token e
 - The header shows the active model and provider plus a session token meter. Tap the model line to open **Model & provider** and switch either one.
 - **History** lists saved host threads, including the ones from before you started a new thread. Tap one to replay text and tool cards.
 - Every user, assistant, tool and system message has a **Copy** button.
+- The header **⧉** button copies the entire conversation — messages, tool inputs/results, timing/token stats and system notes — as one block of text.
 - The in-chat activity line matches the desktop: **Thinking…** with elapsed time, then **✓ +1 command · 2 edits · 3 thoughts · 2 reads · 1 tool** once the run finishes.
 - Discovery uses a UDP broadcast on port **8772**; allow it through the firewall if the phone cannot find the host. The emulator is probed at `10.0.2.2` automatically.
 - LAN exposure should be token-protected; cleartext HTTP is allowed in this development build.
@@ -907,7 +908,7 @@ cd clients
 .\gradlew.bat :shared:jvmTest :desktopApp:compileKotlin :androidApp:assembleDebug :androidApp:testDebugUnitTest
 ```
 
-Current suite: **167 tests**, **14 Android tests**, **51/51 routing evals**, desktop compile, Android debug APK, and an Android emulator smoke test (Pixel 8, API 36) covering pairing-only setup, LAN discovery, the Thinking/counter activity line, first-run setup, streaming chat, tool cards, command/subcommand autocomplete, server-command routing, new-thread reset, history replay, model switching, copy buttons, the token meter and token persistence across an app restart.
+Current suite: **167 tests**, **14 Android tests**, **51/51 routing evals**, desktop compile, Android debug APK, and an Android emulator smoke test (Pixel 8, API 36) covering pairing-only setup, LAN discovery, the Thinking/counter activity line, first-run setup, streaming chat, tool cards, command/subcommand autocomplete, server-command routing, new-thread reset, history replay, model switching, copy buttons, full-chat copy, the token meter and token persistence across an app restart.
 
 ## Documentation
 
