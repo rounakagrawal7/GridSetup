@@ -908,7 +908,7 @@ cd clients
 .\gradlew.bat :shared:jvmTest :desktopApp:compileKotlin :androidApp:assembleDebug :androidApp:testDebugUnitTest
 ```
 
-Current suite: **172 tests**, **14 Android tests**, **51/51 routing evals**, desktop compile, Android debug APK, and an Android emulator smoke test (Pixel 8, API 36) covering pairing-only setup, LAN discovery, the Thinking/counter activity line, first-run setup, streaming chat, tool cards, command/subcommand autocomplete, server-command routing, new-thread reset, history replay, model switching, copy buttons, full-chat copy, the token meter and token persistence across an app restart.
+Current suite: **178 tests**, **14 Android tests**, **51/51 routing evals**, desktop compile, Android debug APK, and an Android emulator smoke test (Pixel 8, API 36) covering pairing-only setup, LAN discovery, the Thinking/counter activity line, first-run setup, streaming chat, tool cards, command/subcommand autocomplete, server-command routing, new-thread reset, history replay, model switching, copy buttons, full-chat copy, the token meter and token persistence across an app restart.
 
 ## Documentation
 

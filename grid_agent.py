@@ -709,8 +709,10 @@ class Recaller:
     PROFILE_HEADER = (
         "# User Profile\n\n"
         "_Durable facts the user shared. Edit this file or use "
-        "/memory add <fact>._"
+        "/memory add <fact>._\n\n"
+        "## Remembered facts"
     )
+    REMEMBERED_SECTION = "## Remembered facts"
     SECRET_RE = re.compile(
         r"(?i)\b(?:api[_-]?key|password|passwd|secret|token|private[_-]?key|"
         r"seed phrase|recovery code)\b|"
@@ -731,6 +733,45 @@ class Recaller:
     def _ensure_profile_header(self) -> None:
         if not self._persona.strip():
             self._persona = self.PROFILE_HEADER
+
+    def _add_fact(self, fact: str) -> None:
+        """Insert a fact under the remembered-facts section, before Boundaries."""
+        entry = f"- {fact}"
+        lines = (self._persona or "").splitlines()
+        section = next(
+            (
+                index
+                for index, line in enumerate(lines)
+                if line.strip().lower() == self.REMEMBERED_SECTION.lower()
+            ),
+            None,
+        )
+        if section is not None:
+            end = len(lines)
+            for index in range(section + 1, len(lines)):
+                if lines[index].startswith("## "):
+                    end = index
+                    break
+            insert_at = end
+            while insert_at > section + 1 and not lines[insert_at - 1].strip():
+                insert_at -= 1
+            lines.insert(insert_at, entry)
+        else:
+            boundary = next(
+                (
+                    index
+                    for index, line in enumerate(lines)
+                    if line.strip().lower() == "## boundaries & notes"
+                ),
+                None,
+            )
+            if boundary is None:
+                if lines and lines[-1].strip():
+                    lines.append("")
+                lines.extend([self.REMEMBERED_SECTION, entry])
+            else:
+                lines[boundary:boundary] = [self.REMEMBERED_SECTION, entry, ""]
+        self._persona = "\n".join(lines).rstrip() + "\n"
 
     def _profile_lines(self) -> List[str]:
         return [
@@ -764,7 +805,7 @@ class Recaller:
         if self._fact_key(fact) in existing:
             return f"Already in your profile: {fact}"
         self._ensure_profile_header()
-        self._persona = self._persona.rstrip() + f"\n- {fact}"
+        self._add_fact(fact)
         self._save_persona()
         return f"Saved to your profile: {fact}"
 
@@ -796,6 +837,18 @@ class Recaller:
             )
         return self._persona.strip()
 
+    def profile_facts(self) -> str:
+        """Profile sections except the Boundaries/notes instructions."""
+        self._reload()
+        lines = []
+        skip = False
+        for line in (self._persona or "").splitlines():
+            if line.startswith("## "):
+                skip = line.strip().lower() == "## boundaries & notes"
+            if not skip:
+                lines.append(line)
+        return "\n".join(lines).strip()
+
     def clear_profile(self) -> str:
         self._persona = ""
         self._save_persona()
@@ -814,7 +867,7 @@ class Recaller:
             key = self._fact_key(fact)
             if not key or key in existing:
                 continue
-            self._persona = self._persona.rstrip() + f"\n- {fact}"
+            self._add_fact(fact)
             existing.add(key)
             added += 1
         if added:
@@ -4618,6 +4671,18 @@ class GridOrchestrator:
             return match.group(1).strip()
         return None
 
+    @staticmethod
+    def _is_profile_question(user_input: str) -> bool:
+        return bool(
+            re.search(
+                r"\b(?:what (?:do|did) you (?:remember|know|learn) about me|"
+                r"what have you (?:learned|remembered) about me|"
+                r"show (?:me )?my (?:profile|memory)|my profile)\b",
+                user_input or "",
+                re.IGNORECASE,
+            )
+        )
+
     def _synthesize_tool_result(self, user_input: str, tool_name: str, result: str) -> str:
         if tool_name in self.NO_SYNTHESIS:
             return ""
@@ -4991,6 +5056,13 @@ class GridOrchestrator:
             )
             if forgotten:
                 return Tools.recaller.forget(forgotten.group(1).strip())
+            if self._is_profile_question(user_input):
+                facts = Tools.recaller.profile_facts()
+                return (
+                    facts
+                    or "I don't have any durable facts about you yet. "
+                    "Say 'remember that ...' to add one."
+                )
 
         # Questions about GRID's own life are answered from the iLog, not by
         # guessing or by calling a skill.

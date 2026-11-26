@@ -146,6 +146,39 @@ class MemoryProfileTests(unittest.TestCase):
         )
         self.assertIsNone(GridOrchestrator._explicit_remember("hello"))
 
+    def test_remember_inserts_under_remembered_facts(self):
+        self.recaller._persona = (
+            "# User Profile\n\n## Boundaries & notes\n- Do not store secrets\n"
+        )
+        self.recaller._save_persona()
+        message = self.recaller.remember("User is your boyfriend")
+        self.assertIn("Saved", message)
+        text = self.recaller.profile_text()
+        self.assertLess(
+            text.index("## Remembered facts"), text.index("## Boundaries & notes")
+        )
+        self.assertLess(
+            text.index("- User is your boyfriend"), text.index("## Boundaries & notes")
+        )
+
+    def test_profile_facts_excludes_boundaries(self):
+        self.recaller._persona = (
+            "# User Profile\n\n"
+            "## Remembered facts\n- User is your boyfriend\n\n"
+            "## Boundaries & notes\n- Do not store secrets\n"
+        )
+        self.recaller._save_persona()
+        facts = self.recaller.profile_facts()
+        self.assertIn("User is your boyfriend", facts)
+        self.assertNotIn("Do not store secrets", facts)
+
+    def test_profile_question_detection(self):
+        self.assertTrue(
+            GridOrchestrator._is_profile_question("what do you remember about me?")
+        )
+        self.assertTrue(GridOrchestrator._is_profile_question("show my profile"))
+        self.assertFalse(GridOrchestrator._is_profile_question("what's the weather"))
+
 
 if __name__ == "__main__":
     unittest.main()

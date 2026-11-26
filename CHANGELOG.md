@@ -25,7 +25,13 @@
   local teardown path (137 tests total, 51 routing evals).
 - New `memory_add` tool (registry now 82) so "remember this" requests are
   actually written to the profile; explicit "remember ... / ... remember this"
-  phrasing also persists deterministically.
+  phrasing also persists deterministically. New facts now go under a dedicated
+  **Remembered facts** section instead of being appended beneath Boundaries, and
+  "what do you remember about me" answers from the profile directly rather than
+  hoping the model repeats every line.
+- Social reply cycles skip comments whose parent no longer exists (Moltbook
+  404) and keep them claimed, so deleted comments no longer generate repeated
+  `reply_error` entries every cycle.
 - Social routing fixes: "social history" now goes to the `social` tool before
   web search, inputs work with or without the `social`/`moltbook` prefix, and
   tool calls with the argument on the `TOOL_CALL:` line parse correctly. Prompt

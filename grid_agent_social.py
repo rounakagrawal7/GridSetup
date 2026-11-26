@@ -1054,6 +1054,13 @@ def _parse_comments(raw: str) -> list:
     return flat
 
 
+def _is_missing_parent(result: str) -> bool:
+    text = result or ""
+    return "Parent comment not found" in text or (
+        '"statusCode": 404' in text and "/comments" in text
+    )
+
+
 def _reply_to_comment(comment: dict, post_title: str) -> Optional[str]:
     """Generate + post a reply to a comment. Returns reply text or None."""
     author = comment.get("author") or {}
@@ -1086,6 +1093,13 @@ def _reply_to_comment(comment: dict, post_title: str) -> Optional[str]:
         return None
     raw_result = c.create_comment(comment.get("post_id", ""), reply, parent_id=comment.get("id"))
     result = auto_verify_response(raw_result)
+    if _is_missing_parent(result):
+        _social_log(
+            "reply_skipped",
+            f"Skipped reply to {name}: parent comment no longer exists",
+            "",
+        )
+        return "__skip__"
     if _mark_rate_limited(raw_result):
         _rate_limit_report()
         return None
@@ -1144,6 +1158,9 @@ def _auto_reply_cycle() -> tuple[int, list]:
             if not _claim_id(MOLTBOOK_REPLIED_FILE, cid):
                 continue
             reply = _reply_to_comment(comment, post_title)
+            if reply == "__skip__":
+                # Keep the claim: a deleted parent is permanent, so don't retry.
+                continue
             if reply:
                 count += 1
                 lines.append(f"  [Reply] to {author.get('name')}: {reply[:70]}...")
