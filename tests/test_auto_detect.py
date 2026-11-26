@@ -84,16 +84,19 @@ class AutoDetectTests(unittest.TestCase):
             "*   Item one\n"
             "*   Item two\n"
             "### Heading\n"
-            "`code`"
+            "`code`\n"
+            "_Durable facts_"
         )
         self.assertNotIn("**", clean)
         self.assertNotIn("*   ", clean)
         self.assertNotIn("###", clean)
         self.assertNotIn("`", clean)
+        self.assertNotIn("_Durable", clean)
         self.assertIn("Projects & Setup:", clean)
         self.assertIn("- Item one", clean)
         self.assertIn("Heading", clean)
         self.assertIn("code", clean)
+        self.assertIn("Durable facts", clean)
 
     def test_synthesis_intent(self):
         self.assertTrue(

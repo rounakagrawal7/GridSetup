@@ -164,6 +164,7 @@ def strip_markdown(text: str) -> str:
     clean = re.sub(r"```[A-Za-z0-9_+.-]*\n?", "", clean)
     clean = re.sub(r"\*\*(.+?)\*\*", r"\1", clean, flags=re.S)
     clean = re.sub(r"__(.+?)__", r"\1", clean, flags=re.S)
+    clean = re.sub(r"(?m)^_{1,2}(.+?)_{1,2}\s*$", r"\1", clean)
     clean = re.sub(r"`([^`\n]+)`", r"\1", clean)
     clean = re.sub(r"^\s{0,3}#{1,6}\s*", "", clean, flags=re.M)
     clean = re.sub(r"^\s{0,3}>\s?", "", clean, flags=re.M)
