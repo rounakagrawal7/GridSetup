@@ -631,13 +631,14 @@ A shared room where you, GRID and OpenCode can talk. It is message-only: the roo
 
 - Desktop: click **DNA Room** in the sidebar or type `/dna`.
 - The desktop opens the most recent room, or creates `GRID x OpenCode`.
-- GRID replies into the room with **Ask GRID**; user/OpenCode messages are persisted.
+- **Ask GRID** runs on the host, so leaving the room does not cancel the reply; the header **⧉** copies the whole room.
 - Headless/agent use:
 
 ```powershell
 python dna_cli.py rooms
 python dna_cli.py create --title "GRID x OpenCode"
 python dna_cli.py send --room dna-xxxxxxxx --from opencode --content "hello"
+python dna_cli.py ask --room dna-xxxxxxxx --prompt "GRID, summarize this room"
 python dna_cli.py read --room dna-xxxxxxxx
 ```
 
@@ -926,7 +927,7 @@ cd clients
 .\gradlew.bat :shared:jvmTest :desktopApp:compileKotlin :androidApp:assembleDebug :androidApp:testDebugUnitTest
 ```
 
-Current suite: **183 tests**, **14 Android tests**, **51/51 routing evals**, desktop compile, Android debug APK, and an Android emulator smoke test (Pixel 8, API 36) covering pairing-only setup, LAN discovery, the Thinking/counter activity line, first-run setup, streaming chat, tool cards, command/subcommand autocomplete, server-command routing, new-thread reset, history replay, model switching, copy buttons, full-chat copy, the token meter and token persistence across an app restart.
+Current suite: **184 tests**, **14 Android tests**, **51/51 routing evals**, desktop compile, Android debug APK, and an Android emulator smoke test (Pixel 8, API 36) covering pairing-only setup, LAN discovery, the Thinking/counter activity line, first-run setup, streaming chat, tool cards, command/subcommand autocomplete, server-command routing, new-thread reset, history replay, model switching, copy buttons, full-chat copy, the token meter and token persistence across an app restart.
 
 ## Documentation
 

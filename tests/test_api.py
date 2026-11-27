@@ -24,6 +24,10 @@ class FakeBackend:
     def fetch_models(backend_type, base_url):
         return ["fake-model", "other-model"]
 
+    def chat(self, messages, temperature=0.3):
+        self.last_messages = messages
+        return "room answer"
+
 
 class FakeOrchestrator:
     def __init__(self):
@@ -158,6 +162,46 @@ class APITestCase(unittest.TestCase):
             timeout=5,
         )
         self.assertEqual(bad.status_code, 400)
+
+    def test_dna_ask_runs_on_host(self):
+        created = requests.post(
+            f"{self.base}/dna/rooms",
+            json={"title": "DNA ask"},
+            headers=self.headers,
+            timeout=5,
+        ).json()
+        room_id = created["room"]["id"]
+        asked = requests.post(
+            f"{self.base}/dna/rooms/{room_id}/ask",
+            json={"prompt": "What is DNA?"},
+            headers=self.headers,
+            timeout=5,
+        )
+        self.assertEqual(asked.status_code, 202)
+        self.assertEqual(asked.json()["status"], "thinking")
+
+        answer = None
+        for _ in range(40):
+            payload = requests.get(
+                f"{self.base}/dna/rooms/{room_id}",
+                headers=self.headers,
+                timeout=5,
+            ).json()
+            answer = next(
+                (
+                    message
+                    for message in payload["messages"]
+                    if message["sender"] == "grid"
+                    and message["kind"] == "answer"
+                ),
+                None,
+            )
+            if answer:
+                break
+            time.sleep(0.05)
+        self.assertIsNotNone(answer)
+        self.assertEqual(answer["content"], "room answer")
+        self.assertEqual(payload["room"]["status"], "idle")
 
     def test_tools_endpoint_lists_registry(self):
         payload = requests.get(f"{self.base}/tools", headers=self.headers).json()

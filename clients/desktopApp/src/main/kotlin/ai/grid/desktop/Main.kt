@@ -1939,6 +1939,25 @@ private fun PairPhoneDialog(
     )
 }
 
+private fun dnaTranscript(room: DnaRoom?, messages: List<DnaMessage>): String {
+    val text = StringBuilder()
+    text.appendLine(
+        room?.let { "DNA room: ${it.title} (${it.id})" } ?: "DNA room"
+    )
+    if (room != null) {
+        text.appendLine("Status: ${room.status} · generation ${room.generation}")
+    }
+    text.appendLine()
+    messages.forEach { message ->
+        text.appendLine(
+            "[${message.timestamp}] ${message.sender.uppercase()} / ${message.kind}"
+        )
+        text.appendLine(message.content)
+        text.appendLine()
+    }
+    return text.toString().trimEnd() + "\n"
+}
+
 @Composable
 private fun DnaRoomScreen(
     baseUrl: String,
@@ -1946,14 +1965,13 @@ private fun DnaRoomScreen(
     onClose: () -> Unit,
 ) {
     val scope = rememberCoroutineScope()
-    val client = remember(baseUrl, token) { GridAgentClient(baseUrl, token) }
     var room by remember { mutableStateOf<DnaRoom?>(null) }
     val messages = remember { mutableStateListOf<DnaMessage>() }
     var input by remember { mutableStateOf(TextFieldValue("")) }
     var busy by remember { mutableStateOf(false) }
-    var asking by remember { mutableStateOf(false) }
     var loading by remember { mutableStateOf(true) }
     var error by remember { mutableStateOf("") }
+    var copiedAll by remember { mutableStateOf(false) }
     val listState = rememberLazyListState()
 
     fun ingest(payload: DnaRoomPayload) {
@@ -2003,11 +2021,17 @@ private fun DnaRoomScreen(
             listState.animateScrollToItem(messages.lastIndex)
         }
     }
+    LaunchedEffect(copiedAll) {
+        if (copiedAll) {
+            delay(1500)
+            copiedAll = false
+        }
+    }
 
     fun sendUserMessage() {
         val id = room?.id ?: return
         val text = input.text.trim()
-        if (text.isEmpty() || busy || asking) return
+        if (text.isEmpty() || busy || room?.status == "thinking") return
         input = TextFieldValue("")
         busy = true
         error = ""
@@ -2030,49 +2054,23 @@ private fun DnaRoomScreen(
     fun askGrid() {
         val id = room?.id ?: return
         val text = input.text.trim()
-        if (text.isEmpty() || busy || asking) return
+        if (text.isEmpty() || busy || room?.status == "thinking") return
         input = TextFieldValue("")
-        asking = true
+        busy = true
         error = ""
         scope.launch {
-            withContext(Dispatchers.IO) {
-                postDnaMessage(baseUrl, token, id, "user", "chat", text)
+            val ok = withContext(Dispatchers.IO) {
+                postDnaAsk(baseUrl, token, id, text)
             }
-            val transcript = messages.takeLast(12).joinToString("\n") {
-                "${it.sender.uppercase()}: ${it.content}"
-            }
-            val prompt = buildString {
-                appendLine("You are GRID in a DNA room with OpenCode and the user.")
-                appendLine("Reply briefly and conversationally to the latest message.")
-                appendLine("Do not call tools unless the user explicitly asks for one.")
-                appendLine()
-                appendLine("Room transcript:")
-                appendLine(transcript)
-                appendLine()
-                appendLine("USER: $text")
-                append("GRID:")
-            }
-            val reply = StringBuilder()
-            try {
-                client.run(prompt, "dna-$id").collect { event ->
-                    if (event is GridEvent.TextDelta) reply.append(event.delta)
+            if (ok) {
+                val payload = withContext(Dispatchers.IO) {
+                    fetchDnaRoom(baseUrl, token, id, messages.lastOrNull()?.id ?: 0)
                 }
-            } catch (cancelled: CancellationException) {
-                throw cancelled
-            } catch (failure: Exception) {
-                error = "GRID reply failed: ${failure.message ?: "unknown error"}"
+                if (payload != null) ingest(payload)
+            } else {
+                error = "GRID could not start replying. Is the host online?"
             }
-            val answer = reply.toString().trim()
-            if (answer.isNotBlank()) {
-                withContext(Dispatchers.IO) {
-                    postDnaMessage(baseUrl, token, id, "grid", "answer", answer)
-                }
-            }
-            val payload = withContext(Dispatchers.IO) {
-                fetchDnaRoom(baseUrl, token, id, messages.lastOrNull()?.id ?: 0)
-            }
-            if (payload != null) ingest(payload)
-            asking = false
+            busy = false
         }
     }
 
@@ -2101,7 +2099,20 @@ private fun DnaRoomScreen(
                     fontFamily = FontFamily.Monospace,
                 )
             }
-            Spacer(Modifier.width(12.dp))
+            Spacer(Modifier.width(8.dp))
+            TextButton(
+                onClick = {
+                    copyToClipboard(dnaTranscript(room, messages))
+                    copiedAll = true
+                },
+            ) {
+                Text(
+                    if (copiedAll) "✓" else "⧉",
+                    color = if (copiedAll) GridGreen else Muted,
+                    fontSize = 16.sp,
+                )
+            }
+            Spacer(Modifier.width(8.dp))
             OutlinedButton(onClick = onClose) { Text("Back to chat", fontSize = 10.sp) }
         }
 
@@ -2166,7 +2177,7 @@ private fun DnaRoomScreen(
         if (error.isNotBlank()) {
             Text(error, color = Danger, fontSize = 10.sp, modifier = Modifier.padding(top = 6.dp))
         }
-        if (asking) {
+        if (room?.status == "thinking") {
             Row(
                 Modifier.padding(top = 6.dp),
                 verticalAlignment = Alignment.CenterVertically,
@@ -2193,7 +2204,7 @@ private fun DnaRoomScreen(
             Spacer(Modifier.width(8.dp))
             Button(
                 onClick = { sendUserMessage() },
-                enabled = !busy && !asking && input.text.isNotBlank(),
+                enabled = !busy && room?.status != "thinking" && input.text.isNotBlank(),
                 colors = ButtonDefaults.buttonColors(
                     containerColor = PanelRaised,
                     contentColor = GridGreen,
@@ -2202,7 +2213,7 @@ private fun DnaRoomScreen(
             Spacer(Modifier.width(6.dp))
             Button(
                 onClick = { askGrid() },
-                enabled = !busy && !asking && input.text.isNotBlank(),
+                enabled = !busy && room?.status != "thinking" && input.text.isNotBlank(),
                 colors = ButtonDefaults.buttonColors(
                     containerColor = GridGreen,
                     contentColor = Color.Black,
@@ -4086,6 +4097,21 @@ private fun postDnaMessage(
     }.toString()
     return dnaHttpJson(
         "$baseUrl/api/v1/dna/rooms/$roomId/messages",
+        token,
+        "POST",
+        body,
+    ) != null
+}
+
+private fun postDnaAsk(
+    baseUrl: String,
+    token: String,
+    roomId: String,
+    prompt: String,
+): Boolean {
+    val body = buildJsonObject { put("prompt", prompt) }.toString()
+    return dnaHttpJson(
+        "$baseUrl/api/v1/dna/rooms/$roomId/ask",
         token,
         "POST",
         body,

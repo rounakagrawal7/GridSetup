@@ -39,10 +39,11 @@
 - New DNA bus and Level 1 room: `grid_dna.py` stores `refs/dna/rooms/<id>/`
   messages, exposes `/api/v1/dna/*`, and ships `dna_cli.py` for agents. The
   desktop has a **DNA Room** workspace (also `/dna`) where user, GRID and
-  OpenCode messages appear live; **Ask GRID** posts a reply into the room.
-  Message-only: the room cannot execute tools or edit code. See
-  `docs/ADR-0003-dna-evolution.md`; Level 2 proposals/review/verification are
-  next.
+  OpenCode messages appear live. **Ask GRID** runs host-side, survives leaving
+  the room and uses a plain-chat prompt (no tool calls or approvals); the
+  header **⧉** copies the full room. Message-only: the room cannot execute
+  tools or edit code. See `docs/ADR-0003-dna-evolution.md`; Level 2
+  proposals/review/verification are next.
 - Social routing fixes: "social history" now goes to the `social` tool before
   web search, inputs work with or without the `social`/`moltbook` prefix, and
   tool calls with the argument on the `TOOL_CALL:` line parse correctly. Prompt

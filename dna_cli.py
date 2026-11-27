@@ -133,6 +133,10 @@ def main() -> int:
     send.add_argument("--content", default="", help="message text; stdin if omitted")
     send.add_argument("--meta", default="", help="JSON object")
 
+    ask = sub.add_parser("ask", help="ask GRID to reply into the room")
+    ask.add_argument("--room", required=True)
+    ask.add_argument("--prompt", default="", help="message text; stdin if omitted")
+
     status = sub.add_parser("status", help="set room status")
     status.add_argument("--room", required=True)
     status.add_argument("--status", required=True)
@@ -214,6 +218,20 @@ def main() -> int:
             f"sent #{message.get('id')} {message.get('sender')}/"
             f"{message.get('kind')} to {args.room}"
         )
+        return 0
+
+    if args.command == "ask":
+        prompt = args.prompt
+        if not prompt:
+            prompt = sys.stdin.read()
+        payload = _request(
+            "POST",
+            f"/api/v1/dna/rooms/{args.room}/ask",
+            base_url,
+            token,
+            {"prompt": prompt},
+        )
+        print(payload.get("status", "thinking"))
         return 0
 
     if args.command == "status":

@@ -416,6 +416,9 @@ class GridAPIServer:
         self._thread = None
         self._approvals_lock = threading.Lock()
         self._approvals: Dict[str, Dict[str, Any]] = {}
+        self._dna_asks: set = set()
+        self._dna_ask_lock = threading.Lock()
+        self._dna_chat_lock = threading.Lock()
         self.shutdown_event = threading.Event()
 
     # ── handlers ─────────────────────────────────────────────
@@ -504,6 +507,98 @@ class GridAPIServer:
             return 404, {"ok": False, "error": str(exc)}
         except DnaError as exc:
             return 400, {"ok": False, "error": str(exc)}
+
+    def _dna_ask(
+        self,
+        room_id: str,
+        body: Dict[str, Any],
+    ) -> Tuple[int, Dict[str, Any]]:
+        prompt = str(body.get("prompt") or "").strip()
+        if not prompt:
+            return 400, {"ok": False, "error": "prompt is required"}
+        if len(prompt) > 8_000:
+            return 400, {"ok": False, "error": "prompt is too large"}
+        try:
+            self.dna.get_room(room_id, 0)
+        except DnaNotFound as exc:
+            return 404, {"ok": False, "error": str(exc)}
+        except DnaError as exc:
+            return 400, {"ok": False, "error": str(exc)}
+        with self._dna_ask_lock:
+            if room_id in self._dna_asks:
+                return 409, {"ok": False, "error": "GRID is already replying in this room"}
+            try:
+                self.dna.add_message(room_id, "user", "chat", prompt)
+                self.dna.set_status(room_id, "thinking")
+            except (DnaError, DnaNotFound) as exc:
+                return 400, {"ok": False, "error": str(exc)}
+            self._dna_asks.add(room_id)
+        threading.Thread(
+            target=self._dna_ask_worker,
+            args=(room_id,),
+            name=f"grid-dna-{room_id}",
+            daemon=True,
+        ).start()
+        return 202, {"ok": True, "status": "thinking"}
+
+    def _dna_ask_worker(self, room_id: str) -> None:
+        try:
+            _room, messages = self.dna.get_room(room_id, 0)
+            conversation = [
+                message
+                for message in messages
+                if message.get("kind") in ("chat", "question", "answer")
+            ][-12:]
+            lines = "\n".join(
+                f"{str(message.get('sender') or '?').upper()}: "
+                f"{message.get('content') or ''}"
+                for message in conversation
+            )
+            system = (
+                "You are GRID in a DNA room with OpenCode and the user. "
+                "Reply briefly (2-4 sentences), plain text only, no Markdown, "
+                "and do not call tools. The room is for supervised evolution; "
+                "do not claim you changed files."
+            )
+            backend = getattr(self.orchestrator, "backend", None)
+            if backend is None or not hasattr(backend, "chat"):
+                raise RuntimeError("no chat backend is active")
+            with self._dna_chat_lock:
+                reply = backend.chat(
+                    [
+                        {"role": "system", "content": system},
+                        {
+                            "role": "user",
+                            "content": (
+                                f"Room conversation:\n{lines}\n\n"
+                                "Reply as GRID to the latest USER message."
+                            ),
+                        },
+                    ],
+                    temperature=0.3,
+                )
+            reply = str(reply or "").strip()
+            cleaner = getattr(self.runtime, "strip_markdown", None)
+            if callable(cleaner):
+                reply = cleaner(reply)
+            if not reply:
+                reply = "(GRID returned no text.)"
+            self.dna.add_message(room_id, "grid", "answer", reply)
+            self.dna.set_status(room_id, "idle")
+        except Exception as exc:
+            try:
+                self.dna.add_message(
+                    room_id,
+                    "system",
+                    "status",
+                    f"GRID reply failed: {exc}",
+                )
+                self.dna.set_status(room_id, "idle")
+            except Exception:
+                pass
+        finally:
+            with self._dna_ask_lock:
+                self._dna_asks.discard(room_id)
 
     def _model_info(self) -> Dict[str, Any]:
         backend = getattr(self.orchestrator, "backend", None)
@@ -1656,6 +1751,13 @@ class GridAPIServer:
                     return
                 if path.startswith("/api/v1/dna/rooms/"):
                     rest = unquote(path[len("/api/v1/dna/rooms/"):])
+                    if rest.endswith("/ask"):
+                        room_id = rest[: -len("/ask")]
+                        code, payload = server._dna_ask(
+                            room_id, self._read_json()
+                        )
+                        server._json(self, code, payload)
+                        return
                     if rest.endswith("/messages"):
                         room_id = rest[: -len("/messages")]
                         code, payload = server._dna_add(
@@ -1759,6 +1861,12 @@ class GridAPIServer:
             target=self._httpd.serve_forever, name="grid-api-http", daemon=True
         )
         self._thread.start()
+        for room in self.dna.list_rooms():
+            if room.get("status") == "thinking":
+                try:
+                    self.dna.set_status(room["id"], "idle")
+                except Exception:
+                    pass
         if self.host not in ("127.0.0.1", "localhost", "::1"):
             self._discovery = DiscoveryResponder(self.port)
             self._discovery.start()
