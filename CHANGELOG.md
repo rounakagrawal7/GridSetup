@@ -49,6 +49,12 @@
   Message-only: the room cannot execute tools or edit code. See
   `docs/ADR-0003-dna-evolution.md`; Level 2
   proposals/review/verification are next.
+- DNA Level 2 skill adoption: `@OpenCode propose a skill ...` (or
+  `dna_cli.py propose`) runs the `dna-builder` agent against
+  `refs/dna/staging/<proposal-id>/`; GRID validates frontmatter/manifest,
+  static-scans tool code and runs tests, then posts a PROPOSAL card. Approve or
+  reject applies the skill under `skills/`, verifies hashes and registry, writes
+  `refs/dna/generations/<n>/genome.json` and bumps the room generation.
 - Social routing fixes: "social history" now goes to the `social` tool before
   web search, inputs work with or without the `social`/`moltbook` prefix, and
   tool calls with the argument on the `TOOL_CALL:` line parse correctly. Prompt

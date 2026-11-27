@@ -625,25 +625,38 @@ The setup screen has no URL or API-token fields. The app stores the host token e
 - Discovery uses a UDP broadcast on port **8772**; allow it through the firewall if the phone cannot find the host. The emulator is probed at `10.0.2.2` automatically.
 - LAN exposure should be token-protected; cleartext HTTP is allowed in this development build.
 
-#### DNA room (Level 1)
+#### DNA room (Level 1 + Level 2)
 
-A shared room where you, GRID and OpenCode can talk. It is message-only: the room never executes GRID tools, and Level 1 cannot modify code.
+A shared room where you, GRID and OpenCode can talk, propose skills, and adopt them with human approval.
+
+**Level 1 — conversation**
 
 - Desktop: click **DNA Room** in the sidebar or type `/dna`.
 - The desktop opens the most recent room, or creates `GRID x OpenCode`.
 - **Ask GRID** runs on the host, so leaving the room does not cancel the reply; the header **⧉** copies the whole room.
 - **Wake OpenCode** by mentioning `@opencode` or “OpenCode” in a user message. The host starts a headless OpenCode reply using the dedicated `dna` agent (`.opencode/agents/dna.md`), so it answers the message directly without editing or running tools. Set `dna.opencode_model` to a model your account can use (the default free model can hit its usage limit). 15 s cooldown and 10 wakes/hour per room. Disable with `"dna": {"wake": false}`.
-- Headless/agent use:
+
+**Level 2 — skill adoption**
+
+- Type `@OpenCode propose a skill for ...` or use the CLI below. A dedicated `dna-builder` agent writes a staged package under `refs/dna/staging/<proposal-id>/` and cannot touch core code.
+- GRID validates the package, runs its tests and posts a **PROPOSAL** card. Approve or reject from the card, or with `dna_cli.py`.
+- Approval applies the skill under `skills/`, verifies the files/hashes and registry, writes `refs/dna/generations/<n>/genome.json`, and increments the room generation.
+- Procedure skills are documentation-only; tool skills use `def run(input: str) -> str`, stdlib only, no network/subprocess/writes, and must ship tests.
+
+Headless/agent use:
 
 ```powershell
 python dna_cli.py rooms
 python dna_cli.py create --title "GRID x OpenCode"
 python dna_cli.py send --room dna-xxxxxxxx --from opencode --content "hello"
 python dna_cli.py ask --room dna-xxxxxxxx --prompt "GRID, summarize this room"
+python dna_cli.py propose --room dna-xxxxxxxx --request "a skill that ..."
+python dna_cli.py approve --proposal prop-xxxxxxxxxxxx
+python dna_cli.py reject --proposal prop-xxxxxxxxxxxx
 python dna_cli.py read --room dna-xxxxxxxx
 ```
 
-Messages live under `refs/dna/rooms/<id>/`. Level 2 skill proposals, review, verification and generation records are next. See `docs/ADR-0003-dna-evolution.md`.
+Messages live under `refs/dna/rooms/<id>/`. Level 3 core-code evolution remains out of scope. See `docs/ADR-0003-dna-evolution.md`.
 
 #### Build details
 
@@ -928,7 +941,7 @@ cd clients
 .\gradlew.bat :shared:jvmTest :desktopApp:compileKotlin :androidApp:assembleDebug :androidApp:testDebugUnitTest
 ```
 
-Current suite: **188 tests**, **14 Android tests**, **51/51 routing evals**, desktop compile, Android debug APK, and an Android emulator smoke test (Pixel 8, API 36) covering pairing-only setup, LAN discovery, the Thinking/counter activity line, first-run setup, streaming chat, tool cards, command/subcommand autocomplete, server-command routing, new-thread reset, history replay, model switching, copy buttons, full-chat copy, the token meter and token persistence across an app restart.
+Current suite: **193 tests**, **14 Android tests**, **51/51 routing evals**, desktop compile, Android debug APK, and an Android emulator smoke test (Pixel 8, API 36) covering pairing-only setup, LAN discovery, the Thinking/counter activity line, first-run setup, streaming chat, tool cards, command/subcommand autocomplete, server-command routing, new-thread reset, history replay, model switching, copy buttons, full-chat copy, the token meter and token persistence across an app restart.
 
 ## Documentation
 

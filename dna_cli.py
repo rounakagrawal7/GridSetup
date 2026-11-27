@@ -137,6 +137,16 @@ def main() -> int:
     ask.add_argument("--room", required=True)
     ask.add_argument("--prompt", default="", help="message text; stdin if omitted")
 
+    propose = sub.add_parser("propose", help="build a Level 2 skill proposal")
+    propose.add_argument("--room", required=True)
+    propose.add_argument("--request", default="", help="skill request; stdin if omitted")
+
+    approve = sub.add_parser("approve", help="approve and apply a proposal")
+    approve.add_argument("--proposal", required=True)
+
+    reject = sub.add_parser("reject", help="reject a proposal")
+    reject.add_argument("--proposal", required=True)
+
     status = sub.add_parser("status", help="set room status")
     status.add_argument("--room", required=True)
     status.add_argument("--status", required=True)
@@ -232,6 +242,33 @@ def main() -> int:
             {"prompt": prompt},
         )
         print(payload.get("status", "thinking"))
+        return 0
+
+    if args.command == "propose":
+        request = args.request or sys.stdin.read()
+        payload = _request(
+            "POST",
+            f"/api/v1/dna/rooms/{args.room}/propose",
+            base_url,
+            token,
+            {"request": request},
+        )
+        print(payload.get("proposal_id", ""))
+        return 0
+
+    if args.command in ("approve", "reject"):
+        payload = _request(
+            "POST",
+            f"/api/v1/dna/proposals/{args.proposal}/"
+            + ("approve" if args.command == "approve" else "reject"),
+            base_url,
+            token,
+            {"approver": "user"},
+        )
+        if args.json:
+            print(json.dumps(payload, indent=2))
+        else:
+            print(payload.get("status", "ok"))
         return 0
 
     if args.command == "status":

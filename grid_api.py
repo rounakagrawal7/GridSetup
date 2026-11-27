@@ -33,6 +33,17 @@ from urllib.parse import parse_qs, unquote, urlparse
 
 from grid_permissions import PermissionPolicy
 from grid_dna import DnaError, DnaNotFound, DnaStore
+from grid_dna_skills import (
+    STAGING_DIR,
+    apply_package,
+    load_proposal,
+    proposal_dir,
+    remove_applied,
+    save_proposal,
+    validate_package,
+    verify_applied,
+    write_genome,
+)
 
 HERE = Path(__file__).resolve().parent
 RUN_DIR = HERE / "run"
@@ -44,6 +55,8 @@ PAIR_TTL_SECONDS = 900
 DNA_WAKE_COOLDOWN_SECONDS = 15
 DNA_WAKE_PER_HOUR = 10
 DNA_WAKE_TIMEOUT_SECONDS = 120
+DNA_PROPOSAL_TIMEOUT_SECONDS = 240
+DNA_PROPOSAL_PER_HOUR = 5
 OPENCODE_BIN = os.environ.get("OPENCODE_BIN", "opencode")
 PAIR_MAX_ATTEMPTS = 5
 DEFAULT_TOKEN_FILE = RUN_DIR / "api_token"
@@ -424,6 +437,9 @@ class GridAPIServer:
         self._dna_wake_lock = threading.Lock()
         self._dna_wake_last: Dict[str, float] = {}
         self._dna_wake_times: Dict[str, List[float]] = {}
+        self._dna_proposals: set = set()
+        self._dna_proposal_lock = threading.Lock()
+        self._dna_proposal_times: Dict[str, List[float]] = {}
         if self.dna_wake_enabled:
             self.dna.add_listener(self._on_dna_message)
         self.refs_dir = Path(refs_dir) if refs_dir else REFS_REA
@@ -635,6 +651,29 @@ class GridAPIServer:
             return
         if not self._should_wake_opencode(message):
             return
+        meta = message.get("meta") or {}
+        if isinstance(meta, dict) and meta.get("proposal_request"):
+            return
+        text = str(message.get("content") or "")
+        if re.search(r"\bpropose\b", text, re.IGNORECASE) and re.search(
+            r"\bskill\b", text, re.IGNORECASE
+        ):
+            code, payload = self._dna_propose(
+                room_id,
+                {"request": text},
+                post_user=False,
+            )
+            if code not in (200, 202):
+                try:
+                    self.dna.add_message(
+                        room_id,
+                        "system",
+                        "status",
+                        str(payload.get("error") or "could not start proposal"),
+                    )
+                except Exception:
+                    pass
+            return
         self._wake_opencode(room_id)
 
     def _wake_opencode(self, room_id: str) -> None:
@@ -677,12 +716,17 @@ class GridAPIServer:
             daemon=True,
         ).start()
 
-    def _opencode_command(self, room_id: str, prompt: str) -> List[str]:
+    def _opencode_command(
+        self,
+        room_id: str,
+        prompt: str,
+        builder: bool = False,
+    ) -> List[str]:
         binary = shutil.which(OPENCODE_BIN) or OPENCODE_BIN
         args = [
             "run",
             "--agent",
-            "dna",
+            "dna-builder" if builder else "dna",
             "--archived",
             "--title",
             f"DNA {room_id}",
@@ -790,6 +834,290 @@ class GridAPIServer:
             with self._dna_wake_lock:
                 self._dna_wake_rooms.discard(room_id)
             self._set_idle_if_free(room_id)
+
+    def _dna_propose(
+        self,
+        room_id: str,
+        body: Dict[str, Any],
+        post_user: bool = True,
+    ) -> Tuple[int, Dict[str, Any]]:
+        request = str(body.get("request") or "").strip()
+        if not request:
+            return 400, {"ok": False, "error": "request is required"}
+        if len(request) > 4_000:
+            return 400, {"ok": False, "error": "request is too large"}
+        try:
+            self.dna.get_room(room_id, 0)
+        except DnaNotFound as exc:
+            return 404, {"ok": False, "error": str(exc)}
+        except DnaError as exc:
+            return 400, {"ok": False, "error": str(exc)}
+
+        now = time.time()
+        with self._dna_proposal_lock:
+            if room_id in self._dna_proposals:
+                return 409, {"ok": False, "error": "a proposal is already building in this room"}
+            times = [
+                value
+                for value in self._dna_proposal_times.get(room_id, [])
+                if now - value < 3600
+            ]
+            if len(times) >= DNA_PROPOSAL_PER_HOUR:
+                return 429, {
+                    "ok": False,
+                    "error": "Level 2 proposal limit reached for this hour",
+                }
+            proposal_id = "prop-" + uuid.uuid4().hex[:12]
+            staging = proposal_dir(proposal_id)
+            staging.mkdir(parents=True, exist_ok=True)
+            (staging / "REQUEST.md").write_text(
+                f"# DNA Level 2 request\n\n{request}\n",
+                encoding="utf-8",
+            )
+            save_proposal(
+                {
+                    "id": proposal_id,
+                    "room_id": room_id,
+                    "request": request,
+                    "created_at": datetime.now().isoformat(timespec="seconds"),
+                    "status": "building",
+                    "report": None,
+                }
+            )
+            times.append(now)
+            self._dna_proposal_times[room_id] = times
+            self._dna_proposals.add(room_id)
+
+        if post_user:
+            try:
+                self.dna.add_message(
+                    room_id,
+                    "user",
+                    "chat",
+                    request,
+                    {"proposal_request": proposal_id},
+                )
+            except Exception:
+                pass
+        try:
+            self.dna.set_status(room_id, "proposing")
+        except Exception:
+            pass
+        threading.Thread(
+            target=self._dna_propose_worker,
+            args=(room_id, proposal_id, request),
+            name=f"grid-dna-proposal-{proposal_id}",
+            daemon=True,
+        ).start()
+        return 202, {
+            "ok": True,
+            "proposal_id": proposal_id,
+            "status": "proposing",
+        }
+
+    def _dna_propose_worker(
+        self,
+        room_id: str,
+        proposal_id: str,
+        request: str,
+    ) -> None:
+        try:
+            staging = proposal_dir(proposal_id)
+            prompt = (
+                "Build a Level 2 GRID skill package in this staging directory:\n"
+                f"{staging}\n\n"
+                f"User request:\n{request}\n\n"
+                "Create <name>/SKILL.md and <name>/manifest.json. Use "
+                "kind=procedure unless executable code is required. For a tool, "
+                "also create <name>.py with def run(input: str) -> str and "
+                "<name>/tests/test_skill.py with a passing test. Tool names must "
+                "use underscores; procedure names may use hyphens. Write only "
+                "inside staging, do not touch GRID core, and do not run shell "
+                "commands. Reply with the name and kind."
+            )
+            command = self._opencode_command(room_id, prompt, builder=True)
+            completed = subprocess.run(
+                command,
+                cwd=str(HERE),
+                capture_output=True,
+                text=True,
+                timeout=DNA_PROPOSAL_TIMEOUT_SECONDS,
+            )
+            if completed.returncode != 0:
+                detail = (completed.stderr or completed.stdout or "").strip()[-800:]
+                raise RuntimeError(detail or f"opencode exited {completed.returncode}")
+            error_text = self._opencode_error(completed.stdout)
+            if error_text:
+                raise RuntimeError(error_text)
+            report = validate_package(staging)
+            proposal = load_proposal(proposal_id)
+            proposal["report"] = report
+            proposal["validated_at"] = datetime.now().isoformat(timespec="seconds")
+            if not report.get("ok"):
+                proposal["status"] = "invalid"
+                save_proposal(proposal)
+                errors = "; ".join(report.get("errors") or [])[:900]
+                self.dna.add_message(
+                    room_id,
+                    "system",
+                    "status",
+                    f"Level 2 proposal invalid: {errors}",
+                )
+                self.dna.set_status(room_id, "idle")
+                return
+            proposal["status"] = "proposed"
+            save_proposal(proposal)
+            tests = report.get("tests") or {}
+            files = report.get("files") or {}
+            tests_label = (
+                "pass"
+                if tests.get("ok") and tests.get("ran")
+                else ("none" if not tests.get("ran") else "fail")
+            )
+            summary = (
+                f"Level 2 proposal: {report['name']} ({report['kind']})\n"
+                f"{report.get('description') or 'No description'}\n"
+                f"Files: {len(files)} · tests: {tests_label}"
+            )
+            self.dna.add_message(
+                room_id,
+                "opencode",
+                "proposal",
+                summary,
+                {
+                    "proposal_id": proposal_id,
+                    "name": report.get("name"),
+                    "kind": report.get("kind"),
+                    "files": len(files),
+                    "tests_ok": bool(tests.get("ok")),
+                    "tests_ran": bool(tests.get("ran")),
+                    "tests_output": str(tests.get("output") or "")[-4000:],
+                    "errors": report.get("errors") or [],
+                },
+            )
+            self.dna.set_status(room_id, "review")
+        except Exception as exc:
+            try:
+                proposal = load_proposal(proposal_id)
+                proposal["status"] = "failed"
+                proposal["error"] = str(exc)
+                save_proposal(proposal)
+            except Exception:
+                pass
+            try:
+                self.dna.add_message(
+                    room_id,
+                    "system",
+                    "status",
+                    f"Level 2 builder failed: {exc}",
+                )
+                self.dna.set_status(room_id, "idle")
+            except Exception:
+                pass
+        finally:
+            with self._dna_proposal_lock:
+                self._dna_proposals.discard(room_id)
+
+    def _dna_decision(
+        self,
+        proposal_id: str,
+        approve: bool,
+        body: Dict[str, Any],
+    ) -> Tuple[int, Dict[str, Any]]:
+        try:
+            proposal = load_proposal(proposal_id)
+        except Exception as exc:
+            return 404, {"ok": False, "error": str(exc)}
+        room_id = str(proposal.get("room_id") or "")
+        if proposal.get("status") != "proposed":
+            return 409, {
+                "ok": False,
+                "error": f"proposal is {proposal.get('status') or 'not ready'}",
+            }
+        if not approve:
+            proposal["status"] = "rejected"
+            proposal["decided_at"] = datetime.now().isoformat(timespec="seconds")
+            save_proposal(proposal)
+            self.dna.add_message(
+                room_id,
+                "system",
+                "approval",
+                f"Rejected Level 2 proposal {proposal_id}.",
+                {"proposal_id": proposal_id, "approved": False},
+            )
+            self.dna.set_status(room_id, "rejected")
+            return 200, {"ok": True, "status": "rejected"}
+
+        report = proposal.get("report") or {}
+        if not report.get("ok"):
+            return 400, {"ok": False, "error": "proposal report is missing or invalid"}
+        tools = getattr(self.runtime, "Tools", None)
+        try:
+            applied = apply_package(report, tools)
+        except Exception as exc:
+            return 400, {"ok": False, "error": f"apply failed: {exc}"}
+        verification = verify_applied(report, tools)
+        if not verification.get("ok"):
+            remove_applied(report.get("name", ""), tools)
+            proposal["status"] = "failed"
+            proposal["verification"] = verification
+            save_proposal(proposal)
+            self.dna.add_message(
+                room_id,
+                "grid",
+                "verification",
+                "Verification failed; the skill was rolled back.\n"
+                + "\n".join(verification.get("errors") or []),
+                {"ok": False, "proposal_id": proposal_id},
+            )
+            self.dna.set_status(room_id, "failed")
+            return 500, {"ok": False, "error": "verification failed"}
+        approver = str(body.get("approver") or "user").strip() or "user"
+        try:
+            genome = write_genome(
+                report,
+                proposal_id,
+                room_id,
+                approver,
+                applied,
+                verification,
+            )
+        except Exception as exc:
+            remove_applied(report.get("name", ""), tools)
+            return 500, {"ok": False, "error": f"genome record failed: {exc}"}
+        proposal["status"] = "adopted"
+        proposal["decided_at"] = datetime.now().isoformat(timespec="seconds")
+        proposal["approver"] = approver
+        proposal["applied"] = applied
+        proposal["verification"] = verification
+        proposal["genome"] = genome
+        save_proposal(proposal)
+        self.dna.add_message(
+            room_id,
+            "system",
+            "approval",
+            f"Approved Level 2 proposal {proposal_id} ({report.get('name')}).",
+            {"proposal_id": proposal_id, "approved": True},
+        )
+        self.dna.add_message(
+            room_id,
+            "grid",
+            "verification",
+            f"Verification passed. Generation {genome['generation']} recorded.",
+            {
+                "ok": True,
+                "proposal_id": proposal_id,
+                "generation": genome["generation"],
+                "genome": genome.get("path"),
+            },
+        )
+        self.dna.set_status(room_id, "adopted", genome["generation"])
+        return 200, {
+            "ok": True,
+            "status": "adopted",
+            "generation": genome["generation"],
+            "genome": genome.get("path"),
+        }
 
     def _model_info(self) -> Dict[str, Any]:
         backend = getattr(self.orchestrator, "backend", None)
@@ -1940,8 +2268,33 @@ class GridAPIServer:
                     code, payload = server._dna_create(self._read_json())
                     server._json(self, code, payload)
                     return
+                if path.startswith("/api/v1/dna/proposals/"):
+                    rest = unquote(path[len("/api/v1/dna/proposals/"):])
+                    if rest.endswith("/approve"):
+                        proposal_id = rest[: -len("/approve")]
+                        code, payload = server._dna_decision(
+                            proposal_id, True, self._read_json()
+                        )
+                        server._json(self, code, payload)
+                        return
+                    if rest.endswith("/reject"):
+                        proposal_id = rest[: -len("/reject")]
+                        code, payload = server._dna_decision(
+                            proposal_id, False, self._read_json()
+                        )
+                        server._json(self, code, payload)
+                        return
+                    server._json(self, 404, {"ok": False, "error": "not found"})
+                    return
                 if path.startswith("/api/v1/dna/rooms/"):
                     rest = unquote(path[len("/api/v1/dna/rooms/"):])
+                    if rest.endswith("/propose"):
+                        room_id = rest[: -len("/propose")]
+                        code, payload = server._dna_propose(
+                            room_id, self._read_json()
+                        )
+                        server._json(self, code, payload)
+                        return
                     if rest.endswith("/ask"):
                         room_id = rest[: -len("/ask")]
                         code, payload = server._dna_ask(

@@ -29,6 +29,7 @@ A loopback HTTP/JSON bus with a JSONL audit log. v0 clients poll every 1.5 s; SS
 - `POST /api/v1/dna/rooms/<id>/messages` appends a message.
 - `POST /api/v1/dna/rooms/<id>/ask` asks GRID to reply into the room; the host runs it in the background, so leaving the room does not cancel it.
 - A user message containing `@opencode` or “OpenCode” wakes a headless `opencode run --agent dna --archived --format json`; the host posts the returned text as `opencode`. The `dna` agent is defined in `.opencode/agents/dna.md` with a no-tools Level 1 prompt. `dna.opencode_model` optionally selects the model; provider errors (e.g. free-limit 429) are surfaced into the room. The bridge is off with `"dna": {"wake": false}` and is limited to one wake per 15 s and 10 per room per hour.
+- `POST /api/v1/dna/rooms/<id>/propose` stages a Level 2 package with the `dna-builder` agent; `POST /api/v1/dna/proposals/<id>/approve|reject` decides it.
 - `GET /api/v1/dna/rooms` lists rooms.
 - `GET /api/v1/dna/rooms/<id>?after=<n>` returns room metadata and new messages.
 - `POST /api/v1/dna/rooms/<id>/status` updates status/generation.
@@ -127,8 +128,9 @@ A failed verification rolls back the adoption. Only a passing verification incre
 - `grid_dna.py` store, `/api/v1/dna/*` endpoints, `dna_cli.py` and a desktop **DNA Room** workspace are implemented.
 - Level 1 conversation works: user/GRID/OpenCode messages, room persistence, polling, a header **⧉** copy-all, and host-side **Ask GRID** that survives leaving the room. GRID asks use a plain-chat prompt (no tools/approvals).
 - Wake-on-message works: a user message mentioning `@opencode`/OpenCode runs a headless OpenCode turn and posts the reply; cooldown/budget and `dna.wake` are enforced.
-- Proposal and verification message kinds are stored and update room status, but the review/apply/verify workflow is not built yet.
-- SSE, a separate DNA credential, Android room UI and the right-hand evolution panel are pending.
+- Level 2 skill adoption works: the `dna-builder` agent writes only under `refs/dna/staging/<proposal-id>/`; GRID validates frontmatter/manifest, static-scans tool code, runs tests, posts a PROPOSAL card, and applies/verifies approved skills under `skills/`. Generation records are written to `refs/dna/generations/<n>/genome.json`.
+- `POST /api/v1/dna/rooms/<id>/propose` creates a staged proposal; `POST /api/v1/dna/proposals/<id>/approve|reject` decides it.
+- SSE, a separate DNA credential, Android room UI, the richer diff/review panel and Level 3 core evolution are pending.
 
 ## MVP acceptance
 
@@ -139,4 +141,10 @@ A failed verification rolls back the adoption. Only a passing verification incre
 5. Room state and transcript persist across restarts.
 6. No core files are modified by the room.
 
-Level 2 adds the skill proposal, review, apply and verification loop.
+Level 2 acceptance:
+
+1. OpenCode builds a package under `refs/dna/staging/` only.
+2. GRID validates and tests it; invalid packages are rejected.
+3. The user approves or rejects from the proposal card or CLI.
+4. Approved skills are applied under `skills/`, verified, and assigned a generation record.
+5. No core files are touched; Level 3 remains separate.

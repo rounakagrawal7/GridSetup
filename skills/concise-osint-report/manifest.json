@@ -1,0 +1,36 @@
+{
+  "name": "concise-osint-report",
+  "version": "0.1.0",
+  "kind": "procedure",
+  "description": "Procedure for writing a concise, source-cited OSINT report that separates observations from inference and states confidence.",
+  "permissions": [],
+  "dependencies": [],
+  "inputs": {
+    "question": {
+      "type": "string",
+      "required": true,
+      "description": "The decision or judgement the report must support."
+    },
+    "evidence": {
+      "type": "string",
+      "required": true,
+      "description": "User-supplied notes, links, exports or pasted source material, with dates where available."
+    },
+    "audience": {
+      "type": "string",
+      "required": false,
+      "description": "Intended reader, for example executive, analyst, technical or legal."
+    },
+    "cut_off": {
+      "type": "string",
+      "required": false,
+      "description": "Date and time after which evidence was not considered, in ISO 8601 form."
+    }
+  },
+  "outputs": {
+    "report": {
+      "type": "string",
+      "description": "A Markdown OSINT report with bottom line, key findings, evidence, assessment, gaps and cited sources."
+    }
+  }
+}

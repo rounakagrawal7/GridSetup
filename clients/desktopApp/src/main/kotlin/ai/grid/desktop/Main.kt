@@ -2074,6 +2074,28 @@ private fun DnaRoomScreen(
         }
     }
 
+    fun decideProposal(proposalId: String, approve: Boolean) {
+        if (proposalId.isBlank() || busy) return
+        busy = true
+        error = ""
+        scope.launch {
+            val ok = withContext(Dispatchers.IO) {
+                postDnaDecision(baseUrl, token, proposalId, approve)
+            }
+            if (!ok) {
+                error = "Could not submit the proposal decision."
+            }
+            val id = room?.id
+            if (id != null) {
+                val payload = withContext(Dispatchers.IO) {
+                    fetchDnaRoom(baseUrl, token, id, messages.lastOrNull()?.id ?: 0)
+                }
+                if (payload != null) ingest(payload)
+            }
+            busy = false
+        }
+    }
+
     Column(Modifier.fillMaxSize().padding(18.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
@@ -2164,7 +2186,13 @@ private fun DnaRoomScreen(
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     itemsIndexed(messages) { _, message ->
-                        DnaMessageCard(message)
+                        DnaMessageCard(
+                            message = message,
+                            canDecide = room?.status == "review",
+                            onDecision = { proposalId, approve ->
+                                decideProposal(proposalId, approve)
+                            },
+                        )
                     }
                 }
                 VerticalScrollbar(
@@ -2224,7 +2252,11 @@ private fun DnaRoomScreen(
 }
 
 @Composable
-private fun DnaMessageCard(message: DnaMessage) {
+private fun DnaMessageCard(
+    message: DnaMessage,
+    canDecide: Boolean,
+    onDecision: (String, Boolean) -> Unit,
+) {
     val senderColor = when (message.sender) {
         "user" -> GridGreen
         "grid" -> GridGreenDim
@@ -2274,6 +2306,40 @@ private fun DnaMessageCard(message: DnaMessage) {
                     lineHeight = 17.sp,
                     modifier = Modifier.padding(end = 6.dp),
                 )
+                if (message.kind == "proposal" && message.proposalId.isNotBlank()) {
+                    HorizontalDivider(
+                        color = Panel,
+                        modifier = Modifier.padding(vertical = 7.dp),
+                    )
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            "${message.proposalKind.ifBlank { "skill" }} · " +
+                                "${message.proposalFiles} files · " +
+                                "tests ${message.proposalTests}",
+                            color = Muted,
+                            fontSize = 9.sp,
+                            fontFamily = FontFamily.Monospace,
+                        )
+                        Spacer(Modifier.weight(1f))
+                        if (canDecide) {
+                            TextButton(
+                                onClick = {
+                                    onDecision(message.proposalId, true)
+                                },
+                            ) { Text("Approve", color = GridGreen, fontSize = 10.sp) }
+                            TextButton(
+                                onClick = {
+                                    onDecision(message.proposalId, false)
+                                },
+                            ) { Text("Reject", color = Danger, fontSize = 10.sp) }
+                        } else {
+                            Text("Reviewed", color = Muted, fontSize = 9.sp)
+                        }
+                    }
+                }
             }
         }
     }
@@ -3984,6 +4050,11 @@ private data class DnaMessage(
     val kind: String,
     val content: String,
     val timestamp: String,
+    val proposalId: String = "",
+    val proposalName: String = "",
+    val proposalKind: String = "",
+    val proposalFiles: Int = 0,
+    val proposalTests: String = "none",
 )
 
 private data class DnaRoomPayload(
@@ -4040,12 +4111,24 @@ private fun dnaRoomFrom(element: JsonElement?): DnaRoom? {
 private fun dnaMessageFrom(element: JsonElement?): DnaMessage? {
     val item = element?.jsonObject ?: return null
     val id = item["id"]?.jsonPrimitive?.intOrNull ?: return null
+    val meta = item["meta"]?.jsonObject
+    val testsOk = meta?.get("tests_ok")?.jsonPrimitive?.booleanOrNull ?: false
+    val testsRan = meta?.get("tests_ran")?.jsonPrimitive?.booleanOrNull ?: false
     return DnaMessage(
         id = id,
         sender = item["sender"]?.jsonPrimitive?.contentOrNull ?: "system",
         kind = item["kind"]?.jsonPrimitive?.contentOrNull ?: "chat",
         content = item["content"]?.jsonPrimitive?.contentOrNull ?: "",
         timestamp = item["timestamp"]?.jsonPrimitive?.contentOrNull ?: "",
+        proposalId = meta?.get("proposal_id")?.jsonPrimitive?.contentOrNull ?: "",
+        proposalName = meta?.get("name")?.jsonPrimitive?.contentOrNull ?: "",
+        proposalKind = meta?.get("kind")?.jsonPrimitive?.contentOrNull ?: "",
+        proposalFiles = meta?.get("files")?.jsonPrimitive?.intOrNull ?: 0,
+        proposalTests = when {
+            !testsRan -> "none"
+            testsOk -> "pass"
+            else -> "fail"
+        },
     )
 }
 
@@ -4112,6 +4195,22 @@ private fun postDnaAsk(
     val body = buildJsonObject { put("prompt", prompt) }.toString()
     return dnaHttpJson(
         "$baseUrl/api/v1/dna/rooms/$roomId/ask",
+        token,
+        "POST",
+        body,
+    ) != null
+}
+
+private fun postDnaDecision(
+    baseUrl: String,
+    token: String,
+    proposalId: String,
+    approve: Boolean,
+): Boolean {
+    val body = buildJsonObject { put("approver", "user") }.toString()
+    val action = if (approve) "approve" else "reject"
+    return dnaHttpJson(
+        "$baseUrl/api/v1/dna/proposals/$proposalId/$action",
         token,
         "POST",
         body,

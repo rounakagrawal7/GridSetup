@@ -15,7 +15,7 @@ from typing import Dict, List, Optional
 import yaml
 
 
-NAME_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
+NAME_RE = re.compile(r"^[a-z0-9]+(?:[-_][a-z0-9]+)*$")
 MAX_SKILL_BYTES = 256 * 1024
 MAX_READ_BYTES = 128 * 1024
 MAX_LOAD_CHARS = 16_000
