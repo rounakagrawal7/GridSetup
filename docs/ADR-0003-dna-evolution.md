@@ -28,6 +28,7 @@ A loopback HTTP/JSON bus with a JSONL audit log. v0 clients poll every 1.5 s; SS
 - `POST /api/v1/dna/rooms` creates a room.
 - `POST /api/v1/dna/rooms/<id>/messages` appends a message.
 - `POST /api/v1/dna/rooms/<id>/ask` asks GRID to reply into the room; the host runs it in the background, so leaving the room does not cancel it.
+- A user message containing `@opencode` or “OpenCode” wakes a headless `opencode run --archived --format json`; the host posts the returned text as `opencode`. The bridge is off with `"dna": {"wake": false}` and is limited to one wake per 15 s and 10 per room per hour.
 - `GET /api/v1/dna/rooms` lists rooms.
 - `GET /api/v1/dna/rooms/<id>?after=<n>` returns room metadata and new messages.
 - `POST /api/v1/dna/rooms/<id>/status` updates status/generation.
@@ -125,6 +126,7 @@ A failed verification rolls back the adoption. Only a passing verification incre
 
 - `grid_dna.py` store, `/api/v1/dna/*` endpoints, `dna_cli.py` and a desktop **DNA Room** workspace are implemented.
 - Level 1 conversation works: user/GRID/OpenCode messages, room persistence, polling, a header **⧉** copy-all, and host-side **Ask GRID** that survives leaving the room. GRID asks use a plain-chat prompt (no tools/approvals).
+- Wake-on-message works: a user message mentioning `@opencode`/OpenCode runs a headless OpenCode turn and posts the reply; cooldown/budget and `dna.wake` are enforced.
 - Proposal and verification message kinds are stored and update room status, but the review/apply/verify workflow is not built yet.
 - SSE, a separate DNA credential, Android room UI and the right-hand evolution panel are pending.
 

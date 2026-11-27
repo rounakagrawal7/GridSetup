@@ -66,6 +66,16 @@ class DnaStoreTests(unittest.TestCase):
         with self.assertRaises(DnaError):
             self.store.add_message(room["id"], "user", "chat", "")
 
+    def test_listener_receives_new_messages(self):
+        seen = []
+        self.store.add_listener(
+            lambda room_id, message: seen.append((room_id, message["id"]))
+        )
+        room = self.store.create_room()
+        self.store.add_message(room["id"], "user", "chat", "hello")
+        self.store.add_message(room["id"], "opencode", "answer", "hi")
+        self.assertEqual(seen, [(room["id"], 1), (room["id"], 2)])
+
 
 if __name__ == "__main__":
     unittest.main()

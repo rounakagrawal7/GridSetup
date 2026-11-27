@@ -50,6 +50,17 @@ class DnaStore:
         self.root = Path(root) if root else DNA_DIR
         self.root.mkdir(parents=True, exist_ok=True)
         self._lock = threading.Lock()
+        self._listeners: List[Any] = []
+
+    def add_listener(self, callback) -> None:
+        self._listeners.append(callback)
+
+    def _notify(self, room_id: str, message: Dict[str, Any]) -> None:
+        for callback in list(self._listeners):
+            try:
+                callback(room_id, message)
+            except Exception:
+                pass
 
     # ── paths ─────────────────────────────────────────────────
 
@@ -227,7 +238,8 @@ class DnaStore:
             if isinstance(meta.get("generation"), int):
                 room["generation"] = max(0, int(meta["generation"]))
             self._write_room(room)
-            return message
+        self._notify(room_id, message)
+        return message
 
     def set_status(
         self,

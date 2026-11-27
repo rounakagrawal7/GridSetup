@@ -53,6 +53,7 @@ class APITestCase(unittest.TestCase):
             port=0,
             thread_store=ThreadStore(self.root / "threads.json"),
             dna_store=DnaStore(self.root / "dna"),
+            enable_dna_wake=False,
             refs_dir=self.refs,
         )
         self.assertTrue(self.server.start())
@@ -202,6 +203,40 @@ class APITestCase(unittest.TestCase):
         self.assertIsNotNone(answer)
         self.assertEqual(answer["content"], "room answer")
         self.assertEqual(payload["room"]["status"], "idle")
+
+    def test_dna_wake_trigger_detection(self):
+        self.assertTrue(
+            GridAPIServer._should_wake_opencode(
+                {"sender": "user", "kind": "chat", "content": "@opencode are you here?"}
+            )
+        )
+        self.assertTrue(
+            GridAPIServer._should_wake_opencode(
+                {"sender": "user", "kind": "chat", "content": "OpenCode, what do you think?"}
+            )
+        )
+        self.assertFalse(
+            GridAPIServer._should_wake_opencode(
+                {"sender": "opencode", "kind": "answer", "content": "OpenCode here"}
+            )
+        )
+        self.assertFalse(
+            GridAPIServer._should_wake_opencode(
+                {"sender": "user", "kind": "chat", "content": "hello GRID"}
+            )
+        )
+
+    def test_parse_opencode_json_reply(self):
+        output = (
+            '{"type":"step_start","part":{}}\n'
+            '{"type":"text","part":{"text":"hello "}}\n'
+            '{"type":"text","part":{"text":"world"}}\n'
+            '{"type":"step_finish","part":{}}\n'
+        )
+        self.assertEqual(
+            GridAPIServer._parse_opencode_reply(output),
+            "hello world",
+        )
 
     def test_tools_endpoint_lists_registry(self):
         payload = requests.get(f"{self.base}/tools", headers=self.headers).json()
@@ -680,6 +715,7 @@ class PairingTests(unittest.TestCase):
             host="127.0.0.1",
             port=0,
             thread_store=ThreadStore(self.root / "threads.json"),
+            enable_dna_wake=False,
             refs_dir=self.root / "rea",
         )
         self.assertTrue(self.server.start())

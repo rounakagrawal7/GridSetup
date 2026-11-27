@@ -18,7 +18,9 @@ import json
 import os
 import re
 import secrets
+import shutil
 import socket
+import subprocess
 import sys
 import threading
 import time
@@ -39,6 +41,10 @@ DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = int(os.environ.get("GRID_API_PORT", "8771"))
 DISCOVERY_PORT = int(os.environ.get("GRID_DISCOVERY_PORT", "8772"))
 PAIR_TTL_SECONDS = 900
+DNA_WAKE_COOLDOWN_SECONDS = 15
+DNA_WAKE_PER_HOUR = 10
+DNA_WAKE_TIMEOUT_SECONDS = 120
+OPENCODE_BIN = os.environ.get("OPENCODE_BIN", "opencode")
 PAIR_MAX_ATTEMPTS = 5
 DEFAULT_TOKEN_FILE = RUN_DIR / "api_token"
 DEFAULT_THREAD_FILE = RUN_DIR / "api_threads.json"
@@ -399,6 +405,7 @@ class GridAPIServer:
         port: int = DEFAULT_PORT,
         thread_store: Optional[ThreadStore] = None,
         dna_store: Optional[DnaStore] = None,
+        enable_dna_wake: bool = True,
         refs_dir: Optional[Path] = None,
     ):
         self.orchestrator = orchestrator
@@ -409,6 +416,15 @@ class GridAPIServer:
         self.port = int(port)
         self.threads = thread_store or ThreadStore()
         self.dna = dna_store or DnaStore()
+        dna_cfg = self.config.get("dna") if isinstance(self.config, dict) else {}
+        dna_cfg = dna_cfg if isinstance(dna_cfg, dict) else {}
+        self.dna_wake_enabled = bool(enable_dna_wake) and bool(dna_cfg.get("wake", True))
+        self._dna_wake_rooms: set = set()
+        self._dna_wake_lock = threading.Lock()
+        self._dna_wake_last: Dict[str, float] = {}
+        self._dna_wake_times: Dict[str, List[float]] = {}
+        if self.dna_wake_enabled:
+            self.dna.add_listener(self._on_dna_message)
         self.refs_dir = Path(refs_dir) if refs_dir else REFS_REA
         self.pairing = PairingManager()
         self._discovery: Optional[DiscoveryResponder] = None
@@ -584,7 +600,6 @@ class GridAPIServer:
             if not reply:
                 reply = "(GRID returned no text.)"
             self.dna.add_message(room_id, "grid", "answer", reply)
-            self.dna.set_status(room_id, "idle")
         except Exception as exc:
             try:
                 self.dna.add_message(
@@ -593,12 +608,171 @@ class GridAPIServer:
                     "status",
                     f"GRID reply failed: {exc}",
                 )
-                self.dna.set_status(room_id, "idle")
             except Exception:
                 pass
         finally:
             with self._dna_ask_lock:
                 self._dna_asks.discard(room_id)
+            self._set_idle_if_free(room_id)
+
+    @staticmethod
+    def _should_wake_opencode(message: Dict[str, Any]) -> bool:
+        if message.get("sender") != "user":
+            return False
+        if message.get("kind") not in ("chat", "question"):
+            return False
+        return bool(
+            re.search(
+                r"@?opencode\b",
+                str(message.get("content") or ""),
+                re.IGNORECASE,
+            )
+        )
+
+    def _on_dna_message(self, room_id: str, message: Dict[str, Any]) -> None:
+        if not self.dna_wake_enabled:
+            return
+        if not self._should_wake_opencode(message):
+            return
+        self._wake_opencode(room_id)
+
+    def _wake_opencode(self, room_id: str) -> None:
+        now = time.time()
+        with self._dna_wake_lock:
+            if room_id in self._dna_wake_rooms:
+                return
+            last = self._dna_wake_last.get(room_id, 0)
+            if now - last < DNA_WAKE_COOLDOWN_SECONDS:
+                return
+            times = [
+                value
+                for value in self._dna_wake_times.get(room_id, [])
+                if now - value < 3600
+            ]
+            if len(times) >= DNA_WAKE_PER_HOUR:
+                self._dna_wake_times[room_id] = times
+                try:
+                    self.dna.add_message(
+                        room_id,
+                        "system",
+                        "status",
+                        "OpenCode wake limit reached for this hour.",
+                    )
+                except Exception:
+                    pass
+                return
+            times.append(now)
+            self._dna_wake_times[room_id] = times
+            self._dna_wake_last[room_id] = now
+            self._dna_wake_rooms.add(room_id)
+        try:
+            self.dna.set_status(room_id, "thinking")
+        except Exception:
+            pass
+        threading.Thread(
+            target=self._opencode_wake_worker,
+            args=(room_id,),
+            name=f"grid-dna-opencode-{room_id}",
+            daemon=True,
+        ).start()
+
+    @staticmethod
+    def _opencode_command(room_id: str, prompt: str) -> List[str]:
+        binary = shutil.which(OPENCODE_BIN) or OPENCODE_BIN
+        return [
+            binary,
+            "run",
+            "--archived",
+            "--title",
+            f"DNA {room_id}",
+            "--format",
+            "json",
+            prompt,
+        ]
+
+    @staticmethod
+    def _parse_opencode_reply(output: str) -> str:
+        texts: List[str] = []
+        for line in str(output or "").splitlines():
+            line = line.strip()
+            if not line.startswith("{"):
+                continue
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(event, dict) or event.get("type") != "text":
+                continue
+            part = event.get("part") or {}
+            if isinstance(part, dict) and part.get("text"):
+                texts.append(str(part["text"]))
+        return "".join(texts).strip()
+
+    def _set_idle_if_free(self, room_id: str) -> None:
+        with self._dna_ask_lock:
+            grid_busy = room_id in self._dna_asks
+        with self._dna_wake_lock:
+            opencode_busy = room_id in self._dna_wake_rooms
+        if not grid_busy and not opencode_busy:
+            try:
+                self.dna.set_status(room_id, "idle")
+            except Exception:
+                pass
+
+    def _opencode_wake_worker(self, room_id: str) -> None:
+        try:
+            room, messages = self.dna.get_room(room_id, 0)
+            conversation = [
+                message
+                for message in messages
+                if message.get("kind") in ("chat", "question", "answer")
+            ][-14:]
+            lines = "\n".join(
+                f"{str(message.get('sender') or '?').upper()}: "
+                f"{message.get('content') or ''}"
+                for message in conversation
+            )
+            prompt = (
+                "You are OpenCode, the coding agent, in a GRID DNA room. "
+                "This is Level 1 conversation only: you cannot edit files, run "
+                "commands or change the host from this room, so do not offer to. "
+                "The user addressed you. Reply in 2-4 sentences, plain text only, "
+                "no Markdown. Do not use tools.\n\n"
+                f"Room: {room.get('title')} ({room_id})\n\n"
+                f"Conversation:\n{lines}\n\n"
+                "Answer the latest USER message as OpenCode."
+            )
+            completed = subprocess.run(
+                self._opencode_command(room_id, prompt),
+                cwd=str(HERE),
+                capture_output=True,
+                text=True,
+                timeout=DNA_WAKE_TIMEOUT_SECONDS,
+            )
+            if completed.returncode != 0:
+                detail = (completed.stderr or completed.stdout or "").strip()[-600:]
+                raise RuntimeError(detail or f"opencode exited {completed.returncode}")
+            reply = self._parse_opencode_reply(completed.stdout)
+            if not reply:
+                raise RuntimeError("OpenCode returned no text")
+            cleaner = getattr(self.runtime, "strip_markdown", None)
+            if callable(cleaner):
+                reply = cleaner(reply)
+            self.dna.add_message(room_id, "opencode", "answer", reply)
+        except Exception as exc:
+            try:
+                self.dna.add_message(
+                    room_id,
+                    "system",
+                    "status",
+                    f"OpenCode wake failed: {exc}",
+                )
+            except Exception:
+                pass
+        finally:
+            with self._dna_wake_lock:
+                self._dna_wake_rooms.discard(room_id)
+            self._set_idle_if_free(room_id)
 
     def _model_info(self) -> Dict[str, Any]:
         backend = getattr(self.orchestrator, "backend", None)

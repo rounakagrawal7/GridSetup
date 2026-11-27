@@ -632,6 +632,7 @@ A shared room where you, GRID and OpenCode can talk. It is message-only: the roo
 - Desktop: click **DNA Room** in the sidebar or type `/dna`.
 - The desktop opens the most recent room, or creates `GRID x OpenCode`.
 - **Ask GRID** runs on the host, so leaving the room does not cancel the reply; the header **⧉** copies the whole room.
+- **Wake OpenCode** by mentioning `@opencode` or “OpenCode” in a user message. The host starts a headless OpenCode reply and posts it back; 15 s cooldown and 10 wakes/hour per room. Disable with `"dna": {"wake": false}`.
 - Headless/agent use:
 
 ```powershell
@@ -927,7 +928,7 @@ cd clients
 .\gradlew.bat :shared:jvmTest :desktopApp:compileKotlin :androidApp:assembleDebug :androidApp:testDebugUnitTest
 ```
 
-Current suite: **184 tests**, **14 Android tests**, **51/51 routing evals**, desktop compile, Android debug APK, and an Android emulator smoke test (Pixel 8, API 36) covering pairing-only setup, LAN discovery, the Thinking/counter activity line, first-run setup, streaming chat, tool cards, command/subcommand autocomplete, server-command routing, new-thread reset, history replay, model switching, copy buttons, full-chat copy, the token meter and token persistence across an app restart.
+Current suite: **187 tests**, **14 Android tests**, **51/51 routing evals**, desktop compile, Android debug APK, and an Android emulator smoke test (Pixel 8, API 36) covering pairing-only setup, LAN discovery, the Thinking/counter activity line, first-run setup, streaming chat, tool cards, command/subcommand autocomplete, server-command routing, new-thread reset, history replay, model switching, copy buttons, full-chat copy, the token meter and token persistence across an app restart.
 
 ## Documentation
 
