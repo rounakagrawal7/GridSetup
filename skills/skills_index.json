@@ -1,0 +1,9 @@
+{
+  "skills": {
+    "text_stats": {
+      "description": "Deterministic tool that counts characters, non-whitespace characters, lines, words and unique words in a text input and returns the counts as JSON.",
+      "input_desc": "varies (see SKILL.md)",
+      "enabled": true
+    }
+  }
+}

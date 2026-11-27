@@ -2,6 +2,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from typing import Optional
 
 from grid_dna_skills import (
     SkillValidationError,
@@ -54,16 +55,19 @@ def write_skill(root: Path, name: str, kind: str = "procedure", code: str = ""):
 
 
 class FakeSkillManager:
-    def __init__(self, skills_dir: Path):
+    def __init__(self, skills_dir: Path, registry: Optional[dict] = None):
         self.skills_dir = skills_dir
+        self.registry = registry if registry is not None else {}
         self.deleted = []
 
     def create(self, name, description, input_desc, code, schema=None):
         (self.skills_dir / f"{name}.py").write_text(code, encoding="utf-8")
+        self.registry[name] = description
         return f"Skill '{name}' created and registered."
 
     def delete(self, name):
         self.deleted.append(name)
+        self.registry.pop(name, None)
         path = self.skills_dir / f"{name}.py"
         if path.exists():
             path.unlink()
@@ -72,9 +76,9 @@ class FakeSkillManager:
 
 class FakeTools:
     def __init__(self, skills_dir: Path):
-        self.skilldocs = SkillDocManager([skills_dir])
-        self.skills = FakeSkillManager(skills_dir)
         self.registry = {}
+        self.skilldocs = SkillDocManager([skills_dir])
+        self.skills = FakeSkillManager(skills_dir, self.registry)
 
 
 class DnaSkillTests(unittest.TestCase):
@@ -131,6 +135,20 @@ class DnaSkillTests(unittest.TestCase):
         report = validate_package(self.staging)
         with self.assertRaises(SkillValidationError):
             apply_package(report, FakeTools(self.skills), self.skills)
+
+    def test_tool_verify_ignores_surrounding_whitespace(self):
+        write_skill(self.staging, "space_tool", "tool")
+        report = validate_package(self.staging)
+        self.assertTrue(report["ok"], report["errors"])
+        tools = FakeTools(self.skills)
+        apply_package(report, tools, self.skills)
+        applied = self.skills / "space_tool.py"
+        applied.write_text(
+            "\n\n" + applied.read_text(encoding="utf-8").strip() + "\n\n",
+            encoding="utf-8",
+        )
+        verification = verify_applied(report, tools, self.skills)
+        self.assertTrue(verification["ok"], verification["errors"])
 
 
 if __name__ == "__main__":

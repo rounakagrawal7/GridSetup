@@ -423,10 +423,17 @@ def verify_applied(
             errors.append(f"hash mismatch or missing: {rel}")
     if report.get("kind") == "tool":
         tool_dest = skills_dir / f"{name}.py"
-        expected_tool = (report.get("files") or {}).get(f"../{name}.py")
-        if tool_dest.is_file() and expected_tool:
-            if _sha256(tool_dest) != expected_tool:
-                errors.append("tool file hash mismatch")
+        if tool_dest.is_file():
+            staged_tool = Path(report.get("tool_file") or "")
+            if staged_tool.is_file():
+                staged_text = staged_tool.read_text(encoding="utf-8").strip()
+                applied_text = tool_dest.read_text(encoding="utf-8").strip()
+                if staged_text != applied_text:
+                    errors.append("tool file content mismatch")
+            else:
+                expected_tool = (report.get("files") or {}).get(f"../{name}.py")
+                if expected_tool and _sha256(tool_dest) != expected_tool:
+                    errors.append("tool file hash mismatch")
     return {"ok": not errors, "errors": errors, "checks": actual}
 
 

@@ -1,0 +1,21 @@
+{
+  "name": "text_stats",
+  "version": "0.1.0",
+  "kind": "tool",
+  "description": "Deterministic tool that counts characters, non-whitespace characters, lines, words and unique words in a text input and returns the counts as JSON.",
+  "permissions": [],
+  "dependencies": [],
+  "inputs": {
+    "text": {
+      "type": "string",
+      "required": true,
+      "description": "Text to analyse. May be empty and may contain any Unicode characters."
+    }
+  },
+  "outputs": {
+    "stats": {
+      "type": "string",
+      "description": "JSON object string with integer fields characters, characters_no_whitespace, lines, unique_words and words."
+    }
+  }
+}
