@@ -732,15 +732,25 @@ class GridAPIServer:
                 f"{message.get('content') or ''}"
                 for message in conversation
             )
+            latest = next(
+                (
+                    message
+                    for message in reversed(conversation)
+                    if message.get("sender") == "user"
+                ),
+                None,
+            )
+            latest_text = str((latest or {}).get("content") or "").strip()
             prompt = (
-                "You are OpenCode, the coding agent, in a GRID DNA room. "
-                "This is Level 1 conversation only: you cannot edit files, run "
-                "commands or change the host from this room, so do not offer to. "
-                "The user addressed you. Reply in 2-4 sentences, plain text only, "
-                "no Markdown. Do not use tools.\n\n"
+                "You are OpenCode in a GRID DNA room. This is Level 1 "
+                "conversation only. You cannot edit files, run shell commands, "
+                "or change the host from this room; do not offer to do those "
+                "things. Answer the latest user message directly, in 2-4 "
+                "sentences, plain text only, no Markdown and no tools.\n\n"
                 f"Room: {room.get('title')} ({room_id})\n\n"
-                f"Conversation:\n{lines}\n\n"
-                "Answer the latest USER message as OpenCode."
+                f"Latest USER message:\n{latest_text}\n\n"
+                f"Recent conversation for context:\n{lines}\n\n"
+                "OpenCode:"
             )
             completed = subprocess.run(
                 self._opencode_command(room_id, prompt),
