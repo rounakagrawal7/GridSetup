@@ -182,7 +182,8 @@ class APITestCase(unittest.TestCase):
         self.assertEqual(asked.json()["status"], "thinking")
 
         answer = None
-        for _ in range(40):
+        payload = {}
+        for _ in range(100):
             payload = requests.get(
                 f"{self.base}/dna/rooms/{room_id}",
                 headers=self.headers,
@@ -197,7 +198,7 @@ class APITestCase(unittest.TestCase):
                 ),
                 None,
             )
-            if answer:
+            if answer and payload["room"]["status"] == "idle":
                 break
             time.sleep(0.05)
         self.assertIsNotNone(answer)
