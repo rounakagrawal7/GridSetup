@@ -239,6 +239,17 @@ class APITestCase(unittest.TestCase):
             "hello world",
         )
 
+    def test_parse_opencode_error(self):
+        output = (
+            '{"type":"error","error":{"type":"provider.free-limit",'
+            '"message":"Free usage limit reached"}}\n'
+        )
+        self.assertEqual(
+            GridAPIServer._opencode_error(output),
+            "Free usage limit reached",
+        )
+        self.assertEqual(GridAPIServer._opencode_error("{}"), "")
+
     def test_tools_endpoint_lists_registry(self):
         payload = requests.get(f"{self.base}/tools", headers=self.headers).json()
         self.assertTrue(payload["ok"])

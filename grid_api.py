@@ -419,6 +419,7 @@ class GridAPIServer:
         dna_cfg = self.config.get("dna") if isinstance(self.config, dict) else {}
         dna_cfg = dna_cfg if isinstance(dna_cfg, dict) else {}
         self.dna_wake_enabled = bool(enable_dna_wake) and bool(dna_cfg.get("wake", True))
+        self.dna_opencode_model = str(dna_cfg.get("opencode_model") or "").strip()
         self._dna_wake_rooms: set = set()
         self._dna_wake_lock = threading.Lock()
         self._dna_wake_last: Dict[str, float] = {}
@@ -676,19 +677,20 @@ class GridAPIServer:
             daemon=True,
         ).start()
 
-    @staticmethod
-    def _opencode_command(room_id: str, prompt: str) -> List[str]:
+    def _opencode_command(self, room_id: str, prompt: str) -> List[str]:
         binary = shutil.which(OPENCODE_BIN) or OPENCODE_BIN
-        return [
-            binary,
+        args = [
             "run",
+            "--agent",
+            "dna",
             "--archived",
             "--title",
             f"DNA {room_id}",
-            "--format",
-            "json",
-            prompt,
         ]
+        if self.dna_opencode_model:
+            args.extend(["--model", self.dna_opencode_model])
+        args.extend(["--format", "json", prompt])
+        return [binary, *args]
 
     @staticmethod
     def _parse_opencode_reply(output: str) -> str:
@@ -708,6 +710,28 @@ class GridAPIServer:
                 texts.append(str(part["text"]))
         return "".join(texts).strip()
 
+    @staticmethod
+    def _opencode_error(output: str) -> str:
+        for line in str(output or "").splitlines():
+            line = line.strip()
+            if not line.startswith("{"):
+                continue
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(event, dict) or event.get("type") != "error":
+                continue
+            error = event.get("error") or {}
+            if isinstance(error, dict):
+                return str(
+                    error.get("message")
+                    or error.get("type")
+                    or "OpenCode error"
+                )
+            return str(error)
+        return ""
+
     def _set_idle_if_free(self, room_id: str) -> None:
         with self._dna_ask_lock:
             grid_busy = room_id in self._dna_asks
@@ -721,37 +745,19 @@ class GridAPIServer:
 
     def _opencode_wake_worker(self, room_id: str) -> None:
         try:
-            room, messages = self.dna.get_room(room_id, 0)
-            conversation = [
-                message
-                for message in messages
-                if message.get("kind") in ("chat", "question", "answer")
-            ][-14:]
-            lines = "\n".join(
-                f"{str(message.get('sender') or '?').upper()}: "
-                f"{message.get('content') or ''}"
-                for message in conversation
-            )
+            _room, messages = self.dna.get_room(room_id, 0)
             latest = next(
                 (
                     message
-                    for message in reversed(conversation)
+                    for message in reversed(messages)
                     if message.get("sender") == "user"
+                    and message.get("kind") in ("chat", "question")
                 ),
                 None,
             )
-            latest_text = str((latest or {}).get("content") or "").strip()
-            prompt = (
-                "You are OpenCode in a GRID DNA room. This is Level 1 "
-                "conversation only. You cannot edit files, run shell commands, "
-                "or change the host from this room; do not offer to do those "
-                "things. Answer the latest user message directly, in 2-4 "
-                "sentences, plain text only, no Markdown and no tools.\n\n"
-                f"Room: {room.get('title')} ({room_id})\n\n"
-                f"Latest USER message:\n{latest_text}\n\n"
-                f"Recent conversation for context:\n{lines}\n\n"
-                "OpenCode:"
-            )
+            prompt = str((latest or {}).get("content") or "").strip()
+            if not prompt:
+                raise RuntimeError("no user message to answer")
             completed = subprocess.run(
                 self._opencode_command(room_id, prompt),
                 cwd=str(HERE),
@@ -764,7 +770,8 @@ class GridAPIServer:
                 raise RuntimeError(detail or f"opencode exited {completed.returncode}")
             reply = self._parse_opencode_reply(completed.stdout)
             if not reply:
-                raise RuntimeError("OpenCode returned no text")
+                error_text = self._opencode_error(completed.stdout)
+                raise RuntimeError(error_text or "OpenCode returned no text")
             cleaner = getattr(self.runtime, "strip_markdown", None)
             if callable(cleaner):
                 reply = cleaner(reply)

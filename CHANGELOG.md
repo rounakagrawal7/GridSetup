@@ -43,9 +43,11 @@
   the room and uses a plain-chat prompt (no tool calls or approvals); the
   header **⧉** copies the full room. **Wake OpenCode** by mentioning
   `@opencode`/OpenCode in a user message: the host runs a headless
-  `opencode run` and posts the reply back, with a 15 s cooldown, 10 wakes/hour
-  and a `dna.wake` switch. Message-only: the room cannot execute tools or edit
-  code. See `docs/ADR-0003-dna-evolution.md`; Level 2
+  `opencode run --agent dna` (dedicated no-tools Level 1 agent) and posts the
+  reply back, with an optional `dna.opencode_model`, a 15 s cooldown, 10
+  wakes/hour and a `dna.wake` switch. Provider errors are surfaced in the room.
+  Message-only: the room cannot execute tools or edit code. See
+  `docs/ADR-0003-dna-evolution.md`; Level 2
   proposals/review/verification are next.
 - Social routing fixes: "social history" now goes to the `social` tool before
   web search, inputs work with or without the `social`/`moltbook` prefix, and

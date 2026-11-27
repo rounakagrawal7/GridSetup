@@ -28,7 +28,7 @@ A loopback HTTP/JSON bus with a JSONL audit log. v0 clients poll every 1.5 s; SS
 - `POST /api/v1/dna/rooms` creates a room.
 - `POST /api/v1/dna/rooms/<id>/messages` appends a message.
 - `POST /api/v1/dna/rooms/<id>/ask` asks GRID to reply into the room; the host runs it in the background, so leaving the room does not cancel it.
-- A user message containing `@opencode` or “OpenCode” wakes a headless `opencode run --archived --format json`; the host posts the returned text as `opencode`. The bridge is off with `"dna": {"wake": false}` and is limited to one wake per 15 s and 10 per room per hour.
+- A user message containing `@opencode` or “OpenCode” wakes a headless `opencode run --agent dna --archived --format json`; the host posts the returned text as `opencode`. The `dna` agent is defined in `.opencode/agents/dna.md` with a no-tools Level 1 prompt. `dna.opencode_model` optionally selects the model; provider errors (e.g. free-limit 429) are surfaced into the room. The bridge is off with `"dna": {"wake": false}` and is limited to one wake per 15 s and 10 per room per hour.
 - `GET /api/v1/dna/rooms` lists rooms.
 - `GET /api/v1/dna/rooms/<id>?after=<n>` returns room metadata and new messages.
 - `POST /api/v1/dna/rooms/<id>/status` updates status/generation.

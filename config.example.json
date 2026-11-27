@@ -3,7 +3,8 @@
   "base_url": "http://localhost:11434",
   "model": "gemma4:e2b",
   "dna": {
-    "wake": true
+    "wake": true,
+    "opencode_model": ""
   },
   "openai_api_key": "",
   "openrouter_api_key": "",
